@@ -1,0 +1,7 @@
+build/
+gen/
+game/
+run/
+user/
+*.log
+__pycache__/
