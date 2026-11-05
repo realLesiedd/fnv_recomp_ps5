@@ -9,6 +9,8 @@
 #include "com.h"
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 
 #define API(n) static void n(Ctx *c)
 #define S_OK 0
@@ -31,7 +33,10 @@ typedef struct Obj {
   u32 parent;            /* surface -> owning texture object (guest), or 0 */
   int face, level;
   u32 blob, blob_size;   /* shader bytecode / declaration */
+  void *sh;              /* decoded shader (software renderer) */
+  u32 *cache[6][MAXLVL]; /* decoded DXT levels (software renderer) */
 } Obj;
+static void invalidate_cache(struct Obj *o);
 
 #define MAXOBJ (1 << 20)
 static Obj *g_obj[MAXOBJ];
@@ -65,6 +70,7 @@ static void free_storage(Obj *o) {
     }
   if (o->blob) heap_free(o->blob);
   o->blob = 0;
+  invalidate_cache(o);
 }
 
 API(m_AddRef) { u32 g = COM_THIS; RETURN_STD(1, __atomic_add_fetch((u32 *)HP(g + 4), 1, __ATOMIC_SEQ_CST)); }
@@ -110,13 +116,19 @@ static u32 mip_count(u32 w, u32 h) { u32 n = 1; while (w > 1 || h > 1) { w = w >
 
 /* ---- backend (null for now) -------------------------------------------------- */
 static u64 g_frames, g_draws, g_prims;
+static int g_shot_every, g_render_every;
+static void be_present_shot(void);
 static void be_present(void) {
+  be_present_shot();
   g_frames++;
   if (g_frames == 1 || (g_frames % 300) == 0)
     rt_log("D3D9: frame %llu presented (%llu draw calls, %llu primitives so far; null renderer)",
            (unsigned long long)g_frames, (unsigned long long)g_draws, (unsigned long long)g_prims);
 }
 static void be_draw(u32 prims) { g_draws++; g_prims += prims; }
+static u64 g_dump_frame = (u64)-1;
+#define DUMP(...) do { if (g_frames == g_dump_frame) rt_log(__VA_ARGS__); } while (0)
+static void dump_draw(const char *what, u32 type, u32 count);
 
 /* ---- surfaces -------------------------------------------------------------- */
 static u32 g_vt_surface, g_vt_texture, g_vt_cube, g_vt_volume, g_vt_vb, g_vt_ib, g_vt_vs, g_vt_ps, g_vt_decl, g_vt_query,
@@ -142,7 +154,7 @@ static void fill_surface_desc(u32 p, Obj *o, u32 w, u32 h) {
 }
 API(s_GetDesc) { Obj *o = obj(COM_THIS); fill_surface_desc(ARG(1), o, o->w, o->h); RETURN_STD(2, S_OK); }
 API(s_LockRect) {
-  Obj *o = obj(COM_THIS); u32 lr = ARG(1), rc = ARG(2);
+  Obj *o = obj(COM_THIS); u32 lr = ARG(1), rc = ARG(2); invalidate_cache(o); if (o->parent) invalidate_cache(obj(o->parent));
   u32 off = 0;
   if (rc) {
     u32 x = M32(rc), y = M32(rc + 4);
@@ -232,7 +244,7 @@ API(t_GetSurfaceLevel) {
   RETURN_STD(3, S_OK);
 }
 API(t_LockRect) {
-  Obj *o = obj(COM_THIS); u32 l = ARG(1);
+  Obj *o = obj(COM_THIS); u32 l = ARG(1); invalidate_cache(o);
   if (l >= o->levels) RETURN_STD(5, D3DERR_INVALIDCALL);
   lock_level(o, 0, l, ARG(2), ARG(3));
   RETURN_STD(5, S_OK);
@@ -246,7 +258,7 @@ API(cube_GetCubeMapSurface) {
   RETURN_STD(4, S_OK);
 }
 API(cube_LockRect) {
-  Obj *o = obj(COM_THIS); u32 f = ARG(1), l = ARG(2);
+  Obj *o = obj(COM_THIS); u32 f = ARG(1), l = ARG(2); invalidate_cache(o);
   if (f > 5 || l >= o->levels) RETURN_STD(6, D3DERR_INVALIDCALL);
   lock_level(o, f, l, ARG(3), ARG(4));
   RETURN_STD(6, S_OK);
@@ -397,6 +409,7 @@ typedef struct {
   int in_scene;
 } DevState;
 static DevState *D;
+#include "d3d9_swr.inc"
 
 static void set_ref(u32 *slot, u32 g) {
   if (g) M32(g + 4)++;
@@ -479,9 +492,9 @@ static void copy_surface(u32 src, u32 dst) {
   u32 rows = is_dxt(s->fmt) ? (s->h + 3) / 4 : s->h;
   for (u32 y = 0; y < rows; y++) memcpy(HP(d->data[0][0] + y * d->pitch[0]), HP(s->data[0][0] + y * s->pitch[0]), s->pitch[0] < d->pitch[0] ? s->pitch[0] : d->pitch[0]);
 }
-API(d_UpdateSurface) { copy_surface(ARG(1), ARG(3)); RETURN_STD(5, S_OK); }
+API(d_UpdateSurface) { invalidate_cache(obj(ARG(3))); copy_surface(ARG(1), ARG(3)); RETURN_STD(5, S_OK); }
 API(d_UpdateTexture) {
-  Obj *s = obj(ARG(1)), *d = obj(ARG(2));
+  Obj *s = obj(ARG(1)), *d = obj(ARG(2)); invalidate_cache(d);
   if (s && d && s->fmt == d->fmt && s->w == d->w && s->h == d->h) {
     int faces = s->kind == K_CUBE ? 6 : 1;
     for (int f = 0; f < faces; f++)
@@ -494,15 +507,15 @@ API(d_UpdateTexture) {
 }
 API(d_GetRenderTargetData) { copy_surface(ARG(1), ARG(2)); RETURN_STD(3, S_OK); }
 API(d_GetFrontBufferData) { RETURN_STD(3, S_OK); }
-API(d_StretchRect) { RETURN_STD(6, S_OK); }
-API(d_ColorFill) { RETURN_STD(4, S_OK); }
-API(d_SetRenderTarget) { u32 i = ARG(1); if (i < 4) set_ref(&D->rt[i], ARG(2)); RETURN_STD(3, S_OK); }
+API(d_StretchRect) { swr_stretch(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5)); DUMP("StretchRect %08x -> %08x filter %u", ARG(1), ARG(3), ARG(5)); RETURN_STD(6, S_OK); }
+API(d_ColorFill) { swr_colorfill(ARG(1), ARG(2), ARG(3)); RETURN_STD(4, S_OK); }
+API(d_SetRenderTarget) { u32 i = ARG(1); { Obj *o = obj(ARG(2)); DUMP("SetRenderTarget %u = %08x %ux%u fmt %u", i, ARG(2), o ? o->w : 0, o ? o->h : 0, o ? o->fmt : 0); } if (i < 4) set_ref(&D->rt[i], ARG(2)); RETURN_STD(3, S_OK); }
 API(d_GetRenderTarget) { u32 i = ARG(1); if (i >= 4 || !D->rt[i]) { M32(ARG(2)) = 0; RETURN_STD(3, 0x8876086Cu); } get_ref(ARG(2), D->rt[i]); RETURN_STD(3, S_OK); }
 API(d_SetDepthStencilSurface) { set_ref(&D->ds, ARG(1)); RETURN_STD(2, S_OK); }
 API(d_GetDepthStencilSurface) { if (!D->ds) { M32(ARG(1)) = 0; RETURN_STD(2, 0x8876086Cu); } get_ref(ARG(1), D->ds); RETURN_STD(2, S_OK); }
 API(d_BeginScene) { D->in_scene = 1; RETURN_STD(1, S_OK); }
 API(d_EndScene) { D->in_scene = 0; RETURN_STD(1, S_OK); }
-API(d_Clear) { RETURN_STD(7, S_OK); }
+API(d_Clear) { swr_clear(ARG(1), ARG(2), ARG(3), ARG(4), asf(ARG(5))); DUMP("Clear n=%u flags=%x color=%08x", ARG(1), ARG(3), ARG(4)); RETURN_STD(7, S_OK); }
 API(d_SetTransform) { u32 t = ARG(1); if (t < 512) memcpy(D->transform[t], HP(ARG(2)), 64); RETURN_STD(3, S_OK); }
 API(d_GetTransform) { u32 t = ARG(1); if (t < 512) memcpy(HP(ARG(2)), D->transform[t], 64); RETURN_STD(3, S_OK); }
 API(d_MultiplyTransform) { RETURN_STD(3, S_OK); }
@@ -539,10 +552,10 @@ API(d_GetNPatchMode) { c->st[(c->top - 1) & 7] = 0; c->top = (c->top - 1) & 7; R
 static u32 prim_vertices(u32 type, u32 n) {
   switch (type) { case 1: return n; case 2: return n * 2; case 3: return n + 1; case 4: return n * 3; default: return n + 2; }
 }
-API(d_DrawPrimitive) { be_draw(ARG(3)); RETURN_STD(4, S_OK); }
-API(d_DrawIndexedPrimitive) { be_draw(ARG(6)); RETURN_STD(7, S_OK); }
-API(d_DrawPrimitiveUP) { (void)prim_vertices; be_draw(ARG(2)); D->stream[0] = 0; RETURN_STD(5, S_OK); }
-API(d_DrawIndexedPrimitiveUP) { be_draw(ARG(4)); D->stream[0] = 0; D->indices = 0; RETURN_STD(9, S_OK); }
+API(d_DrawPrimitive) { dump_draw("DrawPrimitive", ARG(1), ARG(3)); swr_draw(ARG(1), 0, 0, 0, ARG(2), ARG(3), 0, 0, 0, 0); be_draw(ARG(3)); RETURN_STD(4, S_OK); }
+API(d_DrawIndexedPrimitive) { dump_draw("DrawIndexedPrimitive", ARG(1), ARG(6)); swr_draw(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6), 0, 0, 0, 0); be_draw(ARG(6)); RETURN_STD(7, S_OK); }
+API(d_DrawPrimitiveUP) { (void)prim_vertices; dump_draw("DrawPrimitiveUP", ARG(1), ARG(2)); swr_draw(ARG(1), 0, 0, 0, 0, ARG(2), 0, 0, ARG(3), ARG(4)); be_draw(ARG(2)); D->stream[0] = 0; RETURN_STD(5, S_OK); }
+API(d_DrawIndexedPrimitiveUP) { dump_draw("DrawIndexedPrimitiveUP", ARG(1), ARG(4)); swr_draw(ARG(1), 0, ARG(2), ARG(3), 0, ARG(4), ARG(5), ARG(6), ARG(7), ARG(8)); be_draw(ARG(4)); D->stream[0] = 0; D->indices = 0; RETURN_STD(9, S_OK); }
 API(d_CreateVertexDeclaration) {
   u32 p = ARG(1), n = 0;
   while (M8(p + 8 * n) != 0xff && n < 64) n++;
@@ -774,7 +787,40 @@ static const ComMethod d3d_methods[] = {
   {"IDirect3D9::CreateDevice", 7, i_CreateDevice},
 };
 
+static void be_present_shot(void) {
+  static int init;
+  if (!init) {
+    init = 1;
+    if (getenv("FNV_SHOT_EVERY")) g_shot_every = atoi(getenv("FNV_SHOT_EVERY"));
+    if (getenv("FNV_RENDER_EVERY")) g_render_every = atoi(getenv("FNV_RENDER_EVERY"));
+  }
+  if (g_shot_every && g_render_on && (g_frames + 1) % g_shot_every == 0) {
+    char p[256]; mkdir("shots", 0755);
+    snprintf(p, sizeof p, "shots/frame_%06llu.png", (unsigned long long)g_frames + 1);
+    Obj *bb = obj(D->backbuffer);
+    if (bb) { write_png(p, bb); rt_log("swr: wrote %s (%llu pixels shaded so far)", p, (unsigned long long)g_swr_pixels); }
+  }
+  /* next frame: render it if every frame renders, or if it will be captured */
+  u64 next = g_frames + 2;
+  if (g_render_every) g_render_on = next % g_render_every == 0;
+  else if (g_shot_every && getenv("FNV_RENDER_SHOTS_ONLY")) g_render_on = next % g_shot_every == 0;
+  else g_render_on = 1;
+}
+
+static void dump_draw(const char *what, u32 type, u32 count) {
+  if (g_frames != g_dump_frame) return;
+  Obj *vs = obj(D->vs), *ps = obj(D->ps), *decl = obj(D->decl), *rt = obj(D->rt[0]);
+  char tex[256] = "";
+  for (int i = 0; i < 8; i++) { Obj *t = obj(D->tex[i]); if (t) { char b[48]; snprintf(b, sizeof b, " t%d=%ux%u/%u", i, t->w, t->h, t->fmt); strcat(tex, b); } }
+  char dc[256] = "";
+  if (decl) for (u32 k = 0; k + 1 < decl->blob_size / 8; k++) { u32 e = decl->blob + 8 * k; char b[40]; snprintf(b, sizeof b, " s%u+%u:t%u u%u.%u", M16(e), M16(e + 2), M8(e + 4), M8(e + 6), M8(e + 7)); strcat(dc, b); }
+  rt_log("%s type=%u n=%u vs=%08x(%u) ps=%08x(%u) fvf=%x rt=%ux%u/%u z=%u blend=%u src=%u dst=%u atest=%u cull=%u stride=%u%s |%s", what, type, count,
+         vs ? M32(vs->blob) : 0, vs ? vs->blob_size : 0, ps ? M32(ps->blob) : 0, ps ? ps->blob_size : 0, D->fvf,
+         rt ? rt->w : 0, rt ? rt->h : 0, rt ? rt->fmt : 0, D->rs[7], D->rs[27], D->rs[19], D->rs[20], D->rs[15], D->rs[22], D->stream_stride[0], tex, dc);
+}
+
 API(Direct3DCreate9) {
+  if (getenv("FNV_D3D_DUMP")) g_dump_frame = strtoull(getenv("FNV_D3D_DUMP"), NULL, 10);
   static u32 vt;
   if (!vt) vt = com_vtable(d3d_methods, sizeof d3d_methods / sizeof *d3d_methods);
   init_vtables();

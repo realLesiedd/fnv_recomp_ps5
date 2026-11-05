@@ -88,7 +88,7 @@ GuestFn rt_find_guest(u32 a) {
 }
 
 #define DCACHE 4096
-static struct { u32 a; GuestFn f; } g_dcache[DCACHE];
+static __thread struct { u32 a; GuestFn f; } g_dcache[DCACHE]; /* per thread: no torn reads */
 
 void rt_call_ind(Ctx *restrict c, u32 t) {
   if (t >= THUNK_BASE) {
@@ -106,7 +106,7 @@ void rt_call_ind(Ctx *restrict c, u32 t) {
   else {
     f = rt_find_guest(t);
     if (!f) rt_fatal(c, "call/jump to %08x: no recompiled code there (return address %08x)", t, M32(c->r[4]));
-    g_dcache[h].f = NULL; g_dcache[h].a = t; g_dcache[h].f = f;
+    g_dcache[h].a = t; g_dcache[h].f = f;
   }
   f(c);
 }
