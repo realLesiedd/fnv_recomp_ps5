@@ -781,11 +781,13 @@ API(k_FindFirstFileA) {
   if (sl) { *sl = 0; snprintf(dirw, sizeof dirw, "%s", w); } else strcpy(dirw, ".");
   char hp[2048]; fs_host_path(dirw, hp, sizeof hp);
   DIR *d = opendir(hp);
-  if (g_trace > 1) rt_log("FindFirstFile(%s) dir=%s", pat, hp);
+  int savescan = rt_strcasestr(mask, ".fos") != NULL;
+  if (g_trace > 1 || savescan) rt_log("FindFirstFile(%s) dir=%s%s", pat, hp, d ? "" : " (no such folder)");
   if (!d) { rt_set_error(c, 3); RETURN_STD(2, 0xffffffff); }
   u32 h = h_new(H_FIND); HObj *o = h_get(h);
   o->dir = d; o->pattern = strdup(!strcmp(mask, "*.*") ? "*" : mask); o->dirpath = strdup(hp);
   if (!find_next(o, ARG(1))) { h_close(h); rt_set_error(c, 2); RETURN_STD(2, 0xffffffff); }
+  if (savescan) rt_log("  first match: %s", (char *)HP(ARG(1) + 44));
   RETURN_STD(2, h);
 }
 API(k_FindNextFileA) {
