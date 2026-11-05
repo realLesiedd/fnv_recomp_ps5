@@ -545,12 +545,23 @@ u32 rt_thread_create(Ctx *parent, u32 start, u32 param, u32 stack, u32 flags, u3
   ThreadStart *ts = malloc(sizeof *ts);
   ts->c = c; ts->start = start; ts->param = param; ts->h = h; ts->o = o;
   snprintf(o->name, sizeof o->name, "guest %08x", start);
+  /* host stack: recompiled frames are larger than guest frames, so ask for a big one, but
+     on the PS5 thread stacks come from the small flexible budget: step down until it fits */
+  static const size_t sizes[] = {16u << 20, 8u << 20, 4u << 20, 2u << 20, 1u << 20, 0};
   pthread_t th;
-  pthread_attr_t at;
-  pthread_attr_init(&at);
-  pthread_attr_setstacksize(&at, 64 << 20); /* host stack: recompiled frames are larger than guest frames */
-  pthread_create(&th, &at, thread_main, ts);
+  int err = -1;
+  size_t used = 0;
+  for (int i = 0; err && i < 6; i++) {
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    if (sizes[i]) pthread_attr_setstacksize(&at, sizes[i]);
+    err = pthread_create(&th, &at, thread_main, ts);
+    pthread_attr_destroy(&at);
+    used = sizes[i];
+  }
+  if (err) rt_fatal(parent, "CreateThread: the system refused a host thread for %08x (error %d)", start, err);
   pthread_detach(th);
+  TRACE("host thread for %08x: %zu KiB stack", start, used >> 10);
   *tid = M32(c->fs_base + 0x24);
   return h;
 }
