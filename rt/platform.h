@@ -18,6 +18,7 @@ void plat_rumble(int index, uint16_t low, uint16_t high);
 
 /* DirectInput-style keyboard (DIK scancodes, 0x80 = down) and mouse deltas */
 void plat_keys(uint8_t keys[256]);
+int plat_next_char(void); /* typed text (and Enter/Backspace) as characters, -1 when none: WM_CHAR */
 void plat_mouse(int32_t *dx, int32_t *dy, int32_t *dz, uint8_t buttons[8]);
 
 /* Audio out: fill() runs on an audio thread and writes interleaved stereo s16 frames at the returned rate.

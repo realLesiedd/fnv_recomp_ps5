@@ -88,10 +88,23 @@ static void drop_obj(Obj *o) {
   pthread_mutex_unlock(&g_obj_lock);
   free(o);
 }
+static int bound_where(u32 g) { /* diagnostics: is g (or one of its surfaces) bound to the device? */
+  if (!D) return 0;
+  for (int i = 0; i < 20; i++) if (D->tex[i] && ref_owner(D->tex[i]) == g) return 1;
+  for (int i = 0; i < 4; i++) if (D->rt[i] && ref_owner(D->rt[i]) == g) return 2;
+  if (D->ds && ref_owner(D->ds) == g) return 3;
+  for (int i = 0; i < 16; i++) if (D->stream[i] == g) return 4;
+  if (D->indices == g) return 5;
+  if (D->vs == g || D->ps == g || D->decl == g) return 6;
+  return 0;
+}
 static void destroy_obj(u32 g) {
   Obj *o = obj(g);
   if (!o || o->kind == K_DEVICE || o->kind == K_D3D || o->kind == K_SWAP) return;
   if (D && (g == D->backbuffer || g == D->depth)) return; /* the device's own */
+  static int n_bound;
+  int w = bound_where(g);
+  if (w && n_bound++ < 50) rt_log("D3D9: object %08x (kind %d) released to 0 while bound (%d)", g, o->kind, w);
   for (int f = 0; f < 6; f++) /* a texture's surfaces go with it; their GPU copies hold the GPU texture */
     for (int l = 0; l < MAXLVL; l++) {
       Obj *s = o->sub[f][l] ? obj(o->sub[f][l]) : NULL;

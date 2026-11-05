@@ -8,6 +8,7 @@ static SDL_Window *g_win;
 static SDL_GameController *g_pad[4];
 static uint32_t g_packet;
 static uint8_t g_keys[256];
+static uint8_t g_keys_latch[256]; /* pressed since the game last read the keyboard: a press shorter than a frame still counts */
 static int32_t g_mdx, g_mdy, g_mdz;
 static uint8_t g_mbtn[8];
 static int g_quit;
@@ -100,6 +101,19 @@ static int dik(SDL_Scancode s) {
   }
 }
 
+/* typed characters for WM_CHAR, a small ring */
+static int g_chars[256];
+static unsigned g_char_rd, g_char_wr;
+static void push_char(int ch) {
+  if (g_char_wr - g_char_rd < 256) g_chars[g_char_wr++ % 256] = ch;
+}
+int plat_next_char(void) {
+  pthread_mutex_lock(&g_in_lock);
+  int ch = g_char_rd != g_char_wr ? g_chars[g_char_rd++ % 256] : -1;
+  pthread_mutex_unlock(&g_in_lock);
+  return ch;
+}
+
 void plat_pump(void) {
   if (!g_win) return;
   SDL_Event e;
@@ -107,7 +121,22 @@ void plat_pump(void) {
   while (SDL_PollEvent(&e)) {
     switch (e.type) {
     case SDL_QUIT: g_quit = 1; break;
-    case SDL_KEYDOWN: case SDL_KEYUP: { int k = dik(e.key.keysym.scancode); if (k) g_keys[k] = e.type == SDL_KEYDOWN ? 0x80 : 0; break; }
+    case SDL_KEYDOWN: case SDL_KEYUP: {
+      int k = dik(e.key.keysym.scancode);
+      if (k) g_keys[k] = e.type == SDL_KEYDOWN ? 0x80 : 0;
+      if (k && e.type == SDL_KEYDOWN) g_keys_latch[k] = 0x80;
+      if (e.type == SDL_KEYDOWN) { /* keys that type a control character */
+        SDL_Keycode kc = e.key.keysym.sym;
+        if (kc == SDLK_RETURN || kc == SDLK_KP_ENTER) push_char('\r');
+        else if (kc == SDLK_BACKSPACE) push_char('\b');
+        else if (kc == SDLK_TAB) push_char('\t');
+      }
+      break;
+    }
+    case SDL_TEXTINPUT:
+      for (const unsigned char *t = (const unsigned char *)e.text.text; *t; t++)
+        if (*t < 0x80) push_char(*t); /* ASCII only: the game's console and name entry */
+      break;
     case SDL_MOUSEMOTION: g_mdx += e.motion.xrel; g_mdy += e.motion.yrel; break;
     case SDL_MOUSEWHEEL: g_mdz += e.wheel.y * 120; break;
     case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP: {
@@ -159,7 +188,12 @@ int plat_pad(int index, PlatPad *o, uint32_t *packet) {
 void plat_rumble(int index, uint16_t low, uint16_t high) {
   if (index >= 0 && index < 4 && g_pad[index]) SDL_GameControllerRumble(g_pad[index], low, high, 250);
 }
-void plat_keys(uint8_t keys[256]) { pthread_mutex_lock(&g_in_lock); memcpy(keys, g_keys, 256); pthread_mutex_unlock(&g_in_lock); }
+void plat_keys(uint8_t keys[256]) {
+  pthread_mutex_lock(&g_in_lock);
+  for (int i = 0; i < 256; i++) keys[i] = g_keys[i] | g_keys_latch[i];
+  memset(g_keys_latch, 0, sizeof g_keys_latch);
+  pthread_mutex_unlock(&g_in_lock);
+}
 void plat_mouse(int32_t *dx, int32_t *dy, int32_t *dz, uint8_t b[8]) {
   pthread_mutex_lock(&g_in_lock);
   *dx = g_mdx; *dy = g_mdy; *dz = g_mdz; g_mdx = g_mdy = g_mdz = 0; memcpy(b, g_mbtn, 8);

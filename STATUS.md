@@ -94,7 +94,13 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   on PS5. Three 0.7 s stutters in about 100 s of play (v13's worst was 0.2 s).
 - **v16:** 8 shader-compiler threads (from 4), and DXVK's "compiling shaders" HUD indicator to tie stutters to
   shader compiles. The controller's name (the player's account name on PS5) is no longer logged.
-- **To watch:** stutters in game. The old "all threads 100%" figure came from a
+- **v17, quality:** FalloutPrefs.ini uses the game's VeryHigh preset: full-resolution textures, 15x anisotropic
+  filtering, and the longest object, tree, terrain and grass distances, plus higher shadow and water settings. It
+  leaves out the preset's multisampling. An existing medium file is raised once (marker `[fnv_recomp]
+  iSettingsVersion`), so later changes in the game's settings menu stay. Test harness: typed text reaches the
+  game as WM_CHAR, and key presses shorter than a frame are latched.
+- **To watch:** stutters in game; frame rate outdoors at the longer draw distances; dust and smoke clouds
+  (player video: heavy orange sheets with hard edges, cause not found yet). The old "all threads 100%" figure came from a
   process clock that is not meaningful on PS5; v14 uses getrusage plus per-thread clocks.
 
 ## Roadmap (the player's goals, in order)

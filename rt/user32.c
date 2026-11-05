@@ -85,10 +85,25 @@ API(u_PeekMessageA) {
     static int sent;
     if (!sent) { u32 m = ARG(0); memset(HP(m), 0, 28); M32(m + 4) = 0x12; if (ARG(4) & 1) sent = 1; RETURN_STD(5, 1); } /* WM_QUIT */
   }
+  /* typed text as WM_CHAR to the game window (its console reads text this way) */
+  static int pending = -1;
+  if (pending < 0) pending = plat_next_char();
+  if (pending >= 0 && g_nwnd && (ARG(2) == 0 || (ARG(2) <= 0x102 && ARG(3) >= 0x102))) {
+    u32 m = ARG(0);
+    memset(HP(m), 0, 28);
+    M32(m) = g_wnd[0].hwnd; M32(m + 4) = 0x102; M32(m + 8) = (u32)pending; M32(m + 12) = 1;
+    if (ARG(4) & 1) pending = -1; /* PM_REMOVE */
+    RETURN_STD(5, 1);
+  }
   RETURN_STD(5, 0);
 }
 API(u_TranslateMessage) { RETURN_STD(1, 0); }
-API(u_DispatchMessageA) { RETURN_STD(1, 0); }
+API(u_DispatchMessageA) {
+  u32 m = ARG(0);
+  Wnd *w = wnd(M32(m));
+  u32 r = w ? send(c, w, M32(m + 4), M32(m + 8), M32(m + 12)) : 0;
+  RETURN_STD(1, r);
+}
 API(u_SendMessageA) { Wnd *w = wnd(ARG(0)); u32 a[4] = {ARG(0), ARG(1), ARG(2), ARG(3)}; u32 r = w && w->wndproc ? rt_call_guest(c, w->wndproc, 4, a) : 0; RETURN_STD(4, r); }
 API(u_LoadIconA) { RETURN_STD(2, 0x20001); }
 API(u_LoadCursorA) { RETURN_STD(2, 0x20002); }

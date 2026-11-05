@@ -52,6 +52,39 @@ static void mkdirs(const char *path) {
   mkdir(p, 0755);
 }
 
+/* every key=value of the preset file src into the INI buffer b */
+static char *apply_preset(char *b, const char *src) {
+  long n;
+  char *pre = slurp(src, &n);
+  if (!pre) { rt_log("settings: %s is missing", src); return b; }
+  char sect[128] = "";
+  for (char *l = strtok(pre, "\r\n"); l; l = strtok(NULL, "\r\n")) {
+    if (l[0] == '[') { char *e = strchr(l, ']'); if (e) { *e = 0; snprintf(sect, sizeof sect, "%s", l + 1); } continue; }
+    char *eq = strchr(l, '=');
+    if (!eq || !sect[0] || l[0] == ';') continue;
+    *eq = 0;
+    b = ini_set(b, sect, l, eq + 1);
+  }
+  free(pre);
+  return b;
+}
+
+/* Quality: the game's own VeryHigh preset (full-resolution textures, 15x anisotropic filtering, the longest object,
+   tree, terrain and grass distances, high shadows and water) without its multisampling, which this port does not
+   render. Applied to an existing FalloutPrefs.ini once per SETTINGS_VERSION, so changes made later in the game's
+   settings menu stay. */
+#define SETTINGS_VERSION "2"
+static char *quality(char *b, const char *game_dir) {
+  char src[1200];
+  snprintf(src, sizeof src, "%s/VeryHigh.ini", game_dir);
+  b = apply_preset(b, src);
+  b = ini_set(b, "Display", "iMultiSample", "1");
+  b = ini_set(b, "Display", "iWaterMultisamples", "1");
+  b = ini_set(b, "Display", "bTransparencyMultisampling", "0");
+  b = ini_set(b, "fnv_recomp", "iSettingsVersion", SETTINGS_VERSION);
+  return b;
+}
+
 void rt_first_run(void) {
   char dir[1100], ini[1200], prefs[1200], src[1200];
   snprintf(dir, sizeof dir, "%s/Documents/My Games/FalloutNV", g_user_dir);
@@ -66,10 +99,11 @@ void rt_first_run(void) {
     else rt_log("first run: %s is missing - is the game folder complete?", src);
   }
   if (access(prefs, F_OK) != 0) {
-    const char *preset = getenv("FNV_PRESET") ? getenv("FNV_PRESET") : "medium";
+    const char *preset = getenv("FNV_PRESET") ? getenv("FNV_PRESET") : "VeryHigh";
     snprintf(src, sizeof src, "%s/%s.ini", g_game_dir, preset);
     char *b = slurp(src, &n);
     if (!b) b = strdup("[Display]\r\n");
+    if (!getenv("FNV_PRESET")) b = quality(b, g_game_dir);
     b = ini_set(b, "Display", "sD3DDevice", "\"NVIDIA GeForce 8800 GT (fnv_recomp)\"");
     b = ini_set(b, "Display", "iSize W", "1280");
     b = ini_set(b, "Display", "iSize H", "720");
@@ -77,5 +111,14 @@ void rt_first_run(void) {
     FILE *f = fopen(prefs, "wb"); if (f) { fputs(b, f); fclose(f); }
     free(b);
     rt_log("first run: created FalloutPrefs.ini from %s.ini", preset);
+  } else if (!getenv("FNV_PRESET")) {
+    char *b = slurp(prefs, &n);
+    char *m = b ? rt_strcasestr(b, "iSettingsVersion=") : NULL;
+    if (b && (!m || strncmp(m + 17, SETTINGS_VERSION, strlen(SETTINGS_VERSION)) != 0)) {
+      b = quality(b, g_game_dir);
+      FILE *f = fopen(prefs, "wb"); if (f) { fputs(b, f); fclose(f); }
+      rt_log("settings: FalloutPrefs.ini raised to the VeryHigh preset (textures, filtering, draw distances)");
+    }
+    free(b);
   }
 }
