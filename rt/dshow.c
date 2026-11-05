@@ -29,7 +29,7 @@
 typedef struct {
   int used, refs, running, done, ended_sent, have;
   double pos, t0;                /* silent fallback: wall-clock position */
-  drmp3 mp3;
+  drmp3 *mp3;                    /* heap: dr_mp3 keeps a pointer to itself, so it must never be copied */
   u8 *data;
   u64 frames, frame;             /* total, and next frame to decode (source rate) */
   int volume;                    /* IBasicAudio, hundredths of a dB */
@@ -45,9 +45,9 @@ static u32 g_vt_graph, g_vt_control, g_vt_audio, g_vt_position, g_vt_event;
 
 static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 static Graph *G(Ctx *c) { return &g_graphs[M32(COM_THIS + 8) % MAX_GRAPHS]; }
-static double duration(Graph *g) { return g->have ? (double)g->frames / g->mp3.sampleRate : SILENT_TRACK_SECONDS; }
+static double duration(Graph *g) { return g->have ? (double)g->frames / g->mp3->sampleRate : SILENT_TRACK_SECONDS; }
 static double position(Graph *g) {
-  if (g->have) return (double)g->frame / g->mp3.sampleRate;
+  if (g->have) return (double)g->frame / g->mp3->sampleRate;
   double p = g->pos + (g->running ? now_s() - g->t0 : 0);
   return p > SILENT_TRACK_SECONDS ? SILENT_TRACK_SECONDS : p;
 }
@@ -55,12 +55,12 @@ static double argd(Ctx *c, int i) { u64 v = (u64)ARG(i) | ((u64)ARG(i + 1) << 32
 static void putd(u32 p, double d) { memcpy(HP(p), &d, 8); }
 
 static void free_graph(Graph *g) { /* g_lock held */
-  if (g->have) { drmp3_uninit(&g->mp3); free(g->data); }
+  if (g->have) { drmp3_uninit(g->mp3); free(g->mp3); free(g->data); }
   memset(g, 0, sizeof *g);
 }
 static void seek_frames(Graph *g, u64 f) { /* g_lock held */
   if (f > g->frames) f = g->frames;
-  drmp3_seek_to_pcm_frame(&g->mp3, f);
+  drmp3_seek_to_pcm_frame(g->mp3, f);
   g->frame = f;
   g->chunk_n = g->chunk_i = 0;
   g->frac = 1.0;
@@ -72,8 +72,8 @@ static void seek_frames(Graph *g, u64 f) { /* g_lock held */
 static int next_frame(Graph *g, int16_t out[2]) {
   if (g->chunk_i >= g->chunk_n) {
     int16_t tmp[2 * CHUNK];
-    int ch = g->mp3.channels > 1 ? 2 : 1;
-    int n = (int)drmp3_read_pcm_frames_s16(&g->mp3, CHUNK, tmp);
+    int ch = g->mp3->channels > 1 ? 2 : 1;
+    int n = (int)drmp3_read_pcm_frames_s16(g->mp3, CHUNK, tmp);
     if (n <= 0) return 0;
     for (int i = 0; i < n; i++) { g->chunk[2 * i] = tmp[i * ch]; g->chunk[2 * i + 1] = tmp[i * ch + ch - 1]; }
     g->chunk_n = n;
@@ -91,7 +91,7 @@ void dshow_mix(float *acc, int frames, int out_rate) {
     Graph *g = &g_graphs[i];
     if (!g->used || !g->have || !g->running || g->done) continue;
     float gain = g->volume <= -10000 ? 0.f : powf(10.f, g->volume / 2000.f);
-    double step = (double)g->mp3.sampleRate / out_rate;
+    double step = (double)g->mp3->sampleRate / out_rate;
     for (int k = 0; k < frames && !g->done; k++) {
       while (g->frac >= 1.0) {
         g->prev[0] = g->cur[0];
@@ -197,18 +197,19 @@ API(gb_Render) {
   u32 pin = ARG(1);
   size_t len = 0;
   u8 *data = pin ? read_pin(c, pin, &len) : NULL;
-  drmp3 mp3;
-  if (data && !drmp3_init_memory(&mp3, data, len, NULL)) {
+  drmp3 *mp3 = data ? malloc(sizeof *mp3) : NULL;
+  if (data && !drmp3_init_memory(mp3, data, len, NULL)) {
     rt_log("music: %zu-byte stream is not MP3; music stays silent", len);
+    free(mp3);
     free(data);
     data = NULL;
   }
   if (data) {
-    u64 frames = drmp3_get_pcm_frame_count(&mp3);
-    drmp3_seek_to_pcm_frame(&mp3, 0);
+    u64 frames = drmp3_get_pcm_frame_count(mp3);
+    drmp3_seek_to_pcm_frame(mp3, 0);
     pthread_mutex_lock(&g_lock);
     Graph *g = G(c);
-    if (g->have) { drmp3_uninit(&g->mp3); free(g->data); }
+    if (g->have) { drmp3_uninit(g->mp3); free(g->mp3); free(g->data); }
     g->mp3 = mp3;
     g->data = data;
     g->frames = frames;
@@ -218,7 +219,7 @@ API(gb_Render) {
     static int logged;
     if (logged < 3) {
       logged++;
-      rt_log("music: %.0f s of MP3, %u Hz %u ch", (double)frames / mp3.sampleRate, mp3.sampleRate, mp3.channels);
+      rt_log("music: %.0f s of MP3, %u Hz %u ch", (double)frames / mp3->sampleRate, mp3->sampleRate, mp3->channels);
     }
   }
   RETURN_STD(2, S_OK);
@@ -270,7 +271,7 @@ API(mp_put_CurrentPosition) {
   double sec = argd(c, 1);
   pthread_mutex_lock(&g_lock);
   Graph *g = G(c);
-  if (g->have) seek_frames(g, sec <= 0 ? 0 : (u64)(sec * g->mp3.sampleRate));
+  if (g->have) seek_frames(g, sec <= 0 ? 0 : (u64)(sec * g->mp3->sampleRate));
   else { g->pos = sec; g->t0 = now_s(); }
   pthread_mutex_unlock(&g_lock);
   RETURN_STD(3, S_OK);

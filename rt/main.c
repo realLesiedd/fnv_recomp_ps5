@@ -71,9 +71,15 @@ void rt_fatal(Ctx *c, const char *fmt, ...) {
   fprintf(stderr, "\n*** FATAL [t%d]: ", c ? c->thread_index : -1);
   vfprintf(stderr, fmt, ap);
   fputc('\n', stderr);
-  if (c)
+  if (c) {
     fprintf(stderr, "    eax=%08x ecx=%08x edx=%08x ebx=%08x esp=%08x ebp=%08x esi=%08x edi=%08x\n", c->r[0], c->r[1],
             c->r[2], c->r[3], c->r[4], c->r[5], c->r[6], c->r[7]);
+    for (int k = 0; k < 8; k++) {
+      const char *tn = c->r[k] >= THUNK_BASE ? rt_thunk_name(c->r[k]) : NULL;
+      if (tn) fprintf(stderr, "    register %d holds the address of %s\n", k, tn);
+    }
+    fprintf(stderr, "    last API called on this thread: %s\n", t_last_api ? t_last_api : "(none)");
+  }
   fprintf(stderr, "    host backtrace (f_XXXXXXXX = guest function at that address; rt_fatal is at %p):\n", (void *)&rt_fatal);
   dump_backtrace();
   fflush(stderr);
@@ -135,6 +141,7 @@ void rt_call_ind(Ctx *restrict c, u32 t) {
       const char *outer = g_in_api[ti];
       double outer_since = g_in_api_since[ti];
       if (!outer) { g_in_api_since[ti] = mono_now(); g_in_api[ti] = g_thunk_name[i]; }
+      if (!g_thunk_fn[i]) rt_fatal(c, "call to %s: no host implementation", g_thunk_name[i]);
       g_thunk_fn[i](c);
       g_in_api[ti] = outer; g_in_api_since[ti] = outer_since; /* host calls can nest (window procs) */
       return;

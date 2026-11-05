@@ -86,15 +86,17 @@ API(n_ntohs) { u32 v = ARG(0) & 0xffff; RETURN_STD(1, ((v & 0xff) << 8) | (v >> 
 /* test hook (FNV_PADSCRIPT="30:down,31:a"): scripted presses on controller 0 at the given
    seconds after start, for reproducing menu flows in automated runs */
 static int pad_script(PlatPad *p, u32 *packet) {
-  static int init; static double t0; static struct { double t; u16 b; } ev[32]; static int n;
+  static int init; static double t0; static struct { double t; u16 b; } ev[96]; static int n;
   if (!init) {
     init = 1;
     const char *e = getenv("FNV_PADSCRIPT");
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); t0 = ts.tv_sec + ts.tv_nsec / 1e9;
-    for (; e && *e && n < 32;) {
+    for (; e && *e && n < 96;) {
       double t = strtod(e, (char **)&e); if (*e == ':') e++;
-      u16 b = !strncmp(e, "down", 4) ? 0x2 : !strncmp(e, "up", 2) ? 0x1 : !strncmp(e, "a", 1) ? 0x1000 :
-              !strncmp(e, "b", 1) ? 0x2000 : !strncmp(e, "start", 5) ? 0x10 : 0;
+      /* walk / turn: hold the left stick forward / the right stick right for 3 s (no button) */
+      u16 b = !strncmp(e, "down", 4) ? 0x2 : !strncmp(e, "up", 2) ? 0x1 : !strncmp(e, "walk", 4) ? 0xA001 :
+              !strncmp(e, "turn", 4) ? 0xA002 : !strncmp(e, "a", 1) ? 0x1000 : !strncmp(e, "b", 1) ? 0x2000 :
+              !strncmp(e, "start", 5) ? 0x10 : 0;
       ev[n].t = t; ev[n].b = b; n++;
       while (*e && *e != ',') e++; if (*e == ',') e++;
     }
@@ -104,12 +106,15 @@ static int pad_script(PlatPad *p, u32 *packet) {
   double now = ts.tv_sec + ts.tv_nsec / 1e9 - t0;
   if (now < ev[0].t - 4) return 0; /* plugged in shortly before the first press, like a real pad */
   memset(p, 0, sizeof *p);
-  for (int i = 0; i < n; i++)
-    if (now >= ev[i].t && now < ev[i].t + 0.25) {
+  for (int i = 0; i < n; i++) {
+    if (ev[i].b == 0xA001 && now >= ev[i].t && now < ev[i].t + 3) p->ly = 32767;
+    if (ev[i].b == 0xA002 && now >= ev[i].t && now < ev[i].t + 3) p->rx = 32767;
+    if (ev[i].b < 0xA000 && now >= ev[i].t && now < ev[i].t + 0.25) {
       p->buttons |= ev[i].b;
       if (ev[i].b == 0x2) p->ly = -32000; /* the menus also follow the left stick */
       if (ev[i].b == 0x1) p->ly = 32000;
     }
+  }
   *packet = (u32)(now * 10);
   return 1;
 }
