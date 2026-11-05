@@ -33,12 +33,14 @@ u32 rt_get_proc(const char *dll, const char *name) {
   return rt_thunk(f, nm);
 }
 
-extern void kernel32_init(void), user32_init(void), misc_init(void), dinput_init(void);
+extern void kernel32_init(void), user32_init(void), misc_init(void), dinput_init(void), d3d9_init(void), d3dx_init(void);
 void api_init_all(void) {
   kernel32_init();
   user32_init();
   misc_init();
   dinput_init();
+  d3d9_init();
+  d3dx_init();
 }
 
 /* ---- handles --------------------------------------------------------------- */

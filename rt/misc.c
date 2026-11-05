@@ -35,7 +35,7 @@ API(s_SHGetFolderPathA) {
   TRACE("SHGetFolderPathA(%#x) = %s", csidl, p);
   RETURN_STD(5, 0);
 }
-API(s_ShellExecuteA) { RETURN_STD(6, 2); }
+API(s_ShellExecuteA) { rt_log("ShellExecuteA(%s, %s, %s)", ARG(1) ? STR(ARG(1)) : "", ARG(2) ? STR(ARG(2)) : "", ARG(3) ? STR(ARG(3)) : ""); RETURN_STD(6, 2); }
 API(s_CommandLineToArgvW) {
   /* single argument: the program */
   u32 arr = heap_alloc(16 + 64, 1);

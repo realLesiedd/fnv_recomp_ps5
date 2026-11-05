@@ -10,14 +10,39 @@
   - thread creation (9 game threads start), window class and window creation;
   - DirectInput (keyboard and mouse that report no input), and a DirectSound probe (it reports "no driver");
   - writing RendererInfo.txt.
-- **Where it stops.** The game asks d3d9.dll for Direct3DCreate9, gets nothing, and shows its own
-  "Failed to initialize renderer" message box, then exits normally (exit code 0).
+- **Direct3D 9 front end** (`rt/d3d9.c`).
+  - IDirect3D9 reports an SM3 GPU (shown as "NVIDIA GeForce 8800 GT (fnv_recomp)"). IDirect3DDevice9 has all
+    119 methods.
+  - Textures, cube and volume textures, surfaces, vertex and index buffers, shaders, vertex declarations, queries,
+    state blocks and the swap chain are all implemented.
+  - Resource memory lives in guest memory, so Lock calls hand back plain pointers.
+  - Drawing is a **null renderer**: it counts draw calls and frames but produces no pixels.
+- **D3DX math** (`rt/d3dx.c`): matrix and vector helpers, ID3DXBuffer and the shader profile queries.
+- **Where it stops.** With `FalloutPrefs.ini` naming the adapter (see below), the game goes further:
+  - it creates the D3D9 device at 1280x720;
+  - it writes RendererInfo.txt;
+  - it looks for its shader packages and effect textures in `Data\`;
+  - it builds the menu UI root.
+  It then crashes on `Data\Menus\globals.xml`, because this container has no game data. It's a null pointer in
+  the game's own code (`InterfaceManager::InitInterface`, 0x70ADB0), not a runtime bug.
+
+### First-run config
+
+Without `My Games\FalloutNV\FalloutPrefs.ini`, the game runs `FalloutNVLauncher.exe` and quits, as it does on
+Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter name. Minimal file:
+
+    [Display]
+    sD3DDevice="NVIDIA GeForce 8800 GT (fnv_recomp)"
+    iSize W=1280
+    iSize H=720
+    bFull Screen=0
 
 ## Next, in order
 
-1. **Direct3D 9.** Implement IDirect3D9 and IDirect3DDevice9 (about 120 methods) over a native backend.
-   Either translate to Vulkan or OpenGL, or marshal to dxvk-native's d3d9, which already speaks D3D9 on Linux.
-   d3dx9_38 needs shader assembly/compilation and texture loading: 25 imports.
+1. **GPU backend for the D3D9 front end.** This needs a translator from SM2/SM3 shader bytecode to GLSL or
+   SPIR-V, plus OpenGL or Vulkan draw submission. Every draw call already arrives at `be_draw()` with the full
+   device state in `D`. The rest of d3dx9_38 is still to do: the constant table, DDS texture loading and
+   D3DXLoadSurfaceFromSurface.
 2. **Game data.** Booting to the main menu needs the player's `Data/` folder: the .esm, the BSAs and the INIs.
    The test container only has the exe, so it has never gotten this far here.
 3. **Structured exception handling and C++ throw.** These currently stop with a clear message. They need SEH
