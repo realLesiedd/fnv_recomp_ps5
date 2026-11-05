@@ -88,3 +88,10 @@ HostFn api_lookup(const char *dll, const char *name);
 void api_init_all(void);
 u32 rt_get_proc(const char *dll, const char *name); /* GetProcAddress for emulated DLLs */
 void rt_set_error(Ctx *c, u32 e);
+
+/* portable helpers: libc extensions the PS5 SDK declares are not all usable by an app
+   (a missing one is called through NULL), so the runtime brings its own */
+char *rt_strcasestr(const char *hay, const char *needle);
+int rt_wildmatch(const char *pat, const char *s);            /* '*' and '?', ignoring case; 1 = match */
+const char *rt_realpath(const char *p, char *buf, size_t n); /* absolute path, or p itself */
+void rt_exit(int code) __attribute__((noreturn));

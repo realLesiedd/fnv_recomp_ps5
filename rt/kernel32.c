@@ -9,7 +9,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
-#include <fnmatch.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sched.h>
@@ -278,8 +277,8 @@ API(k_GetCurrentProcess) { RETURN_STD(0, 0xffffffff); }
 API(k_GetCurrentProcessId) { RETURN_STD(0, 0x100); }
 API(k_GetCurrentThread) { RETURN_STD(0, 0xfffffffe); }
 API(k_GetCurrentThreadId) { RETURN_STD(0, cur_tid(c)); }
-API(k_ExitProcess) { rt_log("ExitProcess(%u)", ARG(0)); fflush(NULL); _exit(ARG(0)); }
-API(k_TerminateProcess) { rt_log("TerminateProcess(%u)", ARG(1)); fflush(NULL); _exit(ARG(1)); }
+API(k_ExitProcess) { rt_log("ExitProcess(%u)", ARG(0)); rt_exit(ARG(0)); }
+API(k_TerminateProcess) { rt_log("TerminateProcess(%u)", ARG(1)); rt_exit(ARG(1)); }
 API(k_IsDebuggerPresent) { RETURN_STD(0, 0); }
 API(k_DebugBreak) { rt_log("DebugBreak()"); RETURN_STD(0, 0); }
 API(k_OutputDebugStringA) { rt_log("OutputDebugString: %s", STR(ARG(0))); RETURN_STD(1, 0); }
@@ -575,7 +574,7 @@ API(k_ExitThread) {
   c->r[0] = ARG(0);
   if (t_exit_jmp) longjmp(*t_exit_jmp, 1);
   rt_log("ExitThread on main thread");
-  _exit(ARG(0));
+  rt_exit(ARG(0));
 }
 API(k_GetExitCodeThread) {
   HObj *o = h_get(ARG(0));
@@ -750,7 +749,7 @@ static void fill_find(u32 p, const char *name, struct stat *st) {
 static int find_next(HObj *o, u32 p) {
   struct dirent *e;
   while ((e = readdir(o->dir))) {
-    if (fnmatch(o->pattern, e->d_name, FNM_CASEFOLD)) continue;
+    if (!rt_wildmatch(o->pattern, e->d_name)) continue;
     char full[4096]; struct stat st;
     snprintf(full, sizeof full, "%s/%s", o->dirpath, e->d_name);
     if (stat(full, &st)) continue;

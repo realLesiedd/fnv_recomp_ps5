@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include "rt.h"
 #include <string.h>
+#include <ctype.h>
 #include <strings.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -147,4 +148,44 @@ int fs_host_path(const char *w, char *out, size_t n) {
   resolve_case(buf);
   snprintf(out, n, "%s", buf);
   return 0;
+}
+
+/* ---- portable helpers -------------------------------------------------------- */
+char *rt_strcasestr(const char *hay, const char *needle) {
+  size_t n = strlen(needle);
+  for (; *hay; hay++)
+    if (!strncasecmp(hay, needle, n)) return (char *)hay;
+  return n ? NULL : (char *)hay;
+}
+
+int rt_wildmatch(const char *p, const char *s) {
+  const char *star = NULL, *ss = NULL;
+  while (*s) {
+    if (*p == '*') { star = p++; ss = s; continue; }
+    if (*p == '?' || tolower((unsigned char)*p) == tolower((unsigned char)*s)) { p++; s++; continue; }
+    if (star) { p = star + 1; s = ++ss; continue; }
+    return 0;
+  }
+  while (*p == '*') p++;
+  return *p == 0;
+}
+
+const char *rt_realpath(const char *p, char *buf, size_t n) {
+#ifdef __PROSPERO__
+  snprintf(buf, n, "%s", p); /* PS5 paths are absolute already */
+#else
+  char *r = realpath(p, NULL);
+  snprintf(buf, n, "%s", r ? r : p);
+  free(r);
+#endif
+  return buf;
+}
+
+void rt_exit(int code) {
+  fflush(NULL);
+#ifdef __PROSPERO__
+  exit(code); /* _exit's direct syscall is refused to a PS5 app (SIGSYS) */
+#else
+  _exit(code);
+#endif
 }

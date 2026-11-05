@@ -63,10 +63,14 @@ void rt_fatal(Ctx *c, const char *fmt, ...) {
   if (c)
     fprintf(stderr, "    eax=%08x ecx=%08x edx=%08x ebx=%08x esp=%08x ebp=%08x esi=%08x edi=%08x\n", c->r[0], c->r[1],
             c->r[2], c->r[3], c->r[4], c->r[5], c->r[6], c->r[7]);
-  fprintf(stderr, "    host backtrace (f_XXXXXXXX = guest function at that address):\n");
+  fprintf(stderr, "    host backtrace (f_XXXXXXXX = guest function at that address; rt_fatal is at %p):\n", (void *)&rt_fatal);
   dump_backtrace();
+  fflush(stderr);
   pthread_mutex_unlock(&g_log_lock);
   va_end(ap);
+#ifdef __PROSPERO__
+  __builtin_trap(); /* the console's own crash report follows */
+#endif
   _exit(3);
 }
 
@@ -274,13 +278,13 @@ int main(int argc, char **argv) {
   if (!getenv("FNV_TRACE")) g_trace = 1;
 #endif
   if (!game) game = "game";
-  snprintf(g_game_dir, sizeof g_game_dir, "%s", realpath(game, NULL) ? realpath(game, NULL) : game);
+  rt_realpath(game, g_game_dir, sizeof g_game_dir);
   static char exe_buf[1100];
   if (!exe) { snprintf(exe_buf, sizeof exe_buf, "%s/FalloutNV.exe", g_game_dir); exe = exe_buf; }
   const char *user = getenv("FNV_USER_DIR");
   if (!user) user = "user";
   mkdir(user, 0755);
-  snprintf(g_user_dir, sizeof g_user_dir, "%s", realpath(user, NULL));
+  rt_realpath(user, g_user_dir, sizeof g_user_dir);
 
   struct sigaction sa = {0};
   sa.sa_sigaction = on_fault;

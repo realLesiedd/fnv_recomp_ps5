@@ -19,7 +19,7 @@ static char *slurp(const char *p, long *n) {
 /* set key=value inside [section] of an INI held in a growable buffer */
 static char *ini_set(char *s, const char *sect, const char *key, const char *val) {
   char hdr[128]; snprintf(hdr, sizeof hdr, "[%s]", sect);
-  char *sec = strcasestr(s, hdr);
+  char *sec = rt_strcasestr(s, hdr);
   char line[512]; snprintf(line, sizeof line, "%s=%s", key, val);
   size_t n = strlen(s);
   if (!sec) {
