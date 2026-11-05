@@ -15,6 +15,15 @@
 #include <time.h>
 #include <sys/stat.h>
 
+#include <pthread.h>
+#ifdef __PROSPERO__
+#include <ps5platform/context.h> /* the console's ucontext layout (registers for the stall sampler) */
+#else
+#include <ucontext.h>
+#endif
+
+#define FNV_RELEASE "v9" /* printed at the top of the log so a log shows which build produced it */
+
 int g_trace;
 u32 g_peb;
 static __thread Ctx *t_ctx;
@@ -22,6 +31,12 @@ static __thread const char *t_last_api;
 #define MAXTHR 64
 static const char *volatile g_in_api[MAXTHR];
 static volatile double g_in_api_since[MAXTHR];
+/* stall diagnostics: what every thread last asked of the system, and from where in the game */
+static const char *volatile g_last_api[MAXTHR];
+static volatile u32 g_last_ret[MAXTHR];
+static volatile u64 g_api_calls[MAXTHR];
+static pthread_t g_pth[MAXTHR];
+static volatile int g_pth_set[MAXTHR];
 static double mono_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 u64 g_stat_valloc, g_stat_opens, g_stat_read;
 static pthread_mutex_t g_log_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -138,6 +153,9 @@ void rt_call_ind(Ctx *restrict c, u32 t) {
       if (g_trace > 1) rt_log("-> %s (ret %08x)", g_thunk_name[i], M32(c->r[4]));
       t_last_api = g_thunk_name[i];
       int ti = c->thread_index & (MAXTHR - 1);
+      g_last_api[ti] = g_thunk_name[i];
+      g_last_ret[ti] = M32(c->r[4]);
+      g_api_calls[ti]++;
       const char *outer = g_in_api[ti];
       double outer_since = g_in_api_since[ti];
       if (!outer) { g_in_api_since[ti] = mono_now(); g_in_api[ti] = g_thunk_name[i]; }
@@ -215,7 +233,12 @@ Ctx *rt_new_ctx(u32 stack_size) {
   return c;
 }
 
-void rt_bind_thread(Ctx *c) { t_ctx = c; }
+void rt_bind_thread(Ctx *c) {
+  t_ctx = c;
+  int ti = c->thread_index & (MAXTHR - 1);
+  g_pth[ti] = pthread_self();
+  g_pth_set[ti] = 1;
+}
 
 /* every TEB ever created (they are never freed), so TLS slots can be cleared in all threads */
 #define MAX_TEBS 4096
@@ -303,6 +326,63 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
 
 extern void api_set_cmdline(const char *);
 
+/* stall sampler: SIGUSR2 makes a thread record where it is (host pc and frame-pointer chain); the
+   addresses are symbolized offline against the build (PS5: llvm-pie.elf, minus 0x400000) */
+static volatile u64 g_sample[12];
+static volatile int g_sample_n = -1;
+static void on_sample(int sig, siginfo_t *si, void *ucv) {
+  (void)sig; (void)si;
+  ucontext_t *uc = ucv;
+#ifdef __PROSPERO__
+  u64 pc = uc->uc_mcontext.mc_rip, fp = uc->uc_mcontext.mc_rbp;
+#else
+  u64 pc = uc->uc_mcontext.gregs[REG_RIP], fp = uc->uc_mcontext.gregs[REG_RBP];
+#endif
+  int n = 0;
+  g_sample[n++] = pc;
+  u64 lo = (u64)&n, hi = lo + (16u << 20); /* only walk frames on this thread's stack */
+  while (n < 12 && fp > lo && fp < hi && !(fp & 7)) {
+    u64 next = ((u64 *)fp)[0], ret = ((u64 *)fp)[1];
+    if (!ret) break;
+    g_sample[n++] = ret;
+    if (next <= fp) break;
+    fp = next;
+  }
+  __atomic_store_n(&g_sample_n, n, __ATOMIC_RELEASE);
+}
+static void sample_thread(int t) {
+  if (!g_pth_set[t]) return;
+  __atomic_store_n(&g_sample_n, -1, __ATOMIC_RELEASE);
+  if (pthread_kill(g_pth[t], SIGUSR2)) return;
+  for (int k = 0; k < 50 && __atomic_load_n(&g_sample_n, __ATOMIC_ACQUIRE) < 0; k++) usleep(2000);
+  int n = __atomic_load_n(&g_sample_n, __ATOMIC_ACQUIRE);
+  if (n <= 0) { rt_log("  t%d sample: no answer", t); return; }
+  char b[400];
+  int o = snprintf(b, sizeof b, "  t%d sample (host):", t);
+  for (int k = 0; k < n && o < (int)sizeof b - 20; k++) o += snprintf(b + o, sizeof b - o, " %llx", (unsigned long long)g_sample[k]);
+  rt_log("%s", b);
+}
+/* the game loop stopped polling the controller: say what every thread is doing */
+static void stall_report(double stalled_for) {
+  static u64 prev_calls[MAXTHR];
+  double now = mono_now();
+  rt_log("stall: the game loop has not polled input for %.0f s (fnv_recomp %s; rt_fatal at %p). Threads:", stalled_for,
+         FNV_RELEASE, (void *)&rt_fatal);
+  for (int t = 0; t < MAXTHR; t++) {
+    if (!g_pth_set[t]) continue;
+    const char *in = g_in_api[t], *last = g_last_api[t];
+    u64 calls = g_api_calls[t], d = calls - prev_calls[t];
+    prev_calls[t] = calls;
+    if (in) rt_log("  t%d: in %s for %.1f s (called from %08x), %llu calls since last report", t, in, now - g_in_api_since[t],
+                   g_last_ret[t], (unsigned long long)d);
+    else rt_log("  t%d: running game code; last call %s from %08x, %llu calls since last report", t, last ? last : "(none)",
+                g_last_ret[t], (unsigned long long)d);
+  }
+  sample_thread(0);
+  for (int t = 1; t < MAXTHR; t++)
+    if (g_pth_set[t] && !g_in_api[t] && g_last_api[t]) sample_thread(t);
+}
+
 /* heartbeat: every 5 s, one log line with progress counters and any thread that has been
    inside a single system call for more than 2 s (where a stall is) */
 static void *heartbeat(void *arg) {
@@ -335,6 +415,15 @@ static void *heartbeat(void *arg) {
            rd / 1048576.0, (rd - last_read) / 1048576.0, (unsigned long long)g_stat_valloc, (unsigned long long)g_stat_pad,
            dsound_voices(), stuck[0] ? "; waiting in" : "", stuck);
     last_frames = fr; last_read = rd;
+    /* 15 s without a controller poll while frames were being drawn: report (at most every 30 s, 6 times) */
+    static u64 last_pad;
+    static int quiet_beats, reports;
+    static double last_report;
+    if (fr && g_stat_pad == last_pad) quiet_beats++; else quiet_beats = 0;
+    last_pad = g_stat_pad;
+    static int need = -1;
+    if (need < 0) { const char *e = getenv("FNV_STALL_SECONDS"); need = e && atoi(e) >= 5 ? atoi(e) / 5 : 3; }
+    if (quiet_beats >= need && reports < 6 && now - last_report >= 30) { stall_report(quiet_beats * 5.0); reports++; last_report = now; }
   }
   return NULL;
 }
@@ -369,6 +458,11 @@ int main(int argc, char **argv) {
   mkdir(user, 0755);
   rt_realpath(user, g_user_dir, sizeof g_user_dir);
 
+  rt_log("fnv_recomp %s", FNV_RELEASE);
+  struct sigaction ss = {0};
+  ss.sa_sigaction = on_sample;
+  ss.sa_flags = SA_SIGINFO | SA_RESTART;
+  sigaction(SIGUSR2, &ss, NULL);
   struct sigaction sa = {0};
   sa.sa_sigaction = on_fault;
   sa.sa_flags = SA_SIGINFO;
