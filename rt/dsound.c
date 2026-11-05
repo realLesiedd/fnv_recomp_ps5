@@ -58,6 +58,7 @@ static struct { float p[3], v[3], front[3], top[3], dist, rolloff, doppler; } g_
 static u32 g_vt_ds, g_vt_buf, g_vt_3d, g_vt_lis, g_vt_notify, g_ds_obj, g_lis_obj;
 static volatile int g_voices; /* playing secondary buffers, for the heartbeat */
 void dshow_mix(float *acc, int frames, int out_rate);
+void bink_mix(float *acc, int frames, int out_rate);
 
 static float argf(Ctx *c, int i) { u32 v = ARG(i); float f; memcpy(&f, &v, 4); return f; }
 static float rdf(u32 a) { u32 v = M32(a); float f; memcpy(&f, &v, 4); return f; }
@@ -206,6 +207,7 @@ static void mix(int16_t *out, int frames) {
   }
   pthread_mutex_unlock(&g_mx);
   dshow_mix(acc, frames, g_rate); /* music (dshow.c) */
+  bink_mix(acc, frames, g_rate);  /* movie sound (bink.c) */
   g_voices = voices;
   float m = db100(g_master);
   for (int k = 0; k < 2 * frames; k++) {

@@ -11,6 +11,7 @@ void hb_clear(u32 count, u32 rects, u32 flags, u32 color, float z, u32 stencil) 
 void hb_stretch(u32 src, u32 srect, u32 dst, u32 drect, u32 filter) {}
 void hb_colorfill(u32 surf, u32 rect, u32 color) {}
 void hb_present(void) {}
+void hb_movie_overlay(void) {}
 void hb_readback(Obj *src, Obj *dst) {}
 void hb_release(Obj *o) { o->host = 0; }
 int hb_gpu_mem(char *out, int cap) { (void)out; (void)cap; return 0; }

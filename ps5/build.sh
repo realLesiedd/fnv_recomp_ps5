@@ -56,7 +56,8 @@ dxvk_libs=$(find "$dxvk/build.ps5" -name "*.a" | sort)
   -e _start -o "$out/llvm-pie.elf" \
   "$tri/build/obj/app_crt.o" "$tri/build/obj/app_cpp_runtime.o" \
   "$obj"/rt/*.o "$obj"/gen/*.o \
-  --start-group $dxvk_libs "$pac/user/homebrew/lib/libSDL2.a" "$pac/user/homebrew/lib/libiconv.a" --end-group \
+  --start-group $dxvk_libs "$pac/user/homebrew/lib/libSDL2.a" "$pac/user/homebrew/lib/libiconv.a" \
+  "$pac/user/homebrew/lib/libavcodec.a" "$pac/user/homebrew/lib/libavutil.a" --end-group \
   "$tri/build/stubs/libSceAgc.so" "$tri/build/stubs/libSceAgcDriver.so" \
   "${radv_link_inputs[@]}" \
   --as-needed "$sdk"/target/lib/*.so

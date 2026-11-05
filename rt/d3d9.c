@@ -147,6 +147,7 @@ static void be_platform_present(void);
 u64 g_d3d_frames;
 static void be_present(void) {
   g_d3d_frames = g_frames + 1;
+  if (hb_active()) hb_movie_overlay(); /* a playing Bink movie, over the frame */
   be_present_shot();
   struct timespec p0, p1;
   clock_gettime(CLOCK_MONOTONIC, &p0);

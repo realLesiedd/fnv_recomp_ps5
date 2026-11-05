@@ -63,7 +63,6 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   thread is at 91-96% CPU, so there is little headroom yet.
 - **Sound:** DirectSound mixer, .wav effects (mmio), .ogg voices (stb_vorbis), .mp3 music (dr_mp3).
 - **Fixed along the way:**
-  - Bink intro movies are skipped (no video decoder yet).
   - MMX, SSE shifts and x87 save/restore are recompiled.
   - The MP3 decoder is no longer copied, which crashed on music changes.
   - TLS slots are cleared in every thread on TlsAlloc/TlsFree, which crashed save loads.
@@ -81,6 +80,14 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   - DXVK uses 4 shader-compiler threads instead of 16.
   - The perf line reports per-thread CPU, the three busiest threads, and live/created D3D objects.
   - Startup logs the configured and free host (flexible) memory.
+- **v15, intro and credits:**
+  - The intro movie (FNVIntro.bik, 1280x720, 4 min 50 s, shown on New Game) plays with sound. FFmpeg's Bink decoders
+    sit behind the binkw32 calls (`rt/bink.c`) and the movie's sound goes to the mixer. Decoding takes about
+    3.5 ms per frame, plus about 4 ms to convert each frame to BGRx (measured locally). A button press skips it, as
+    on PC.
+  - The game draws movies as fixed-function textured tiles, which came out black through DXVK here. The GPU
+    backend instead draws the decoded frame over the whole screen before presenting.
+  - The Credits screen (main menu) already worked: scrolling credits over the artwork.
 - **To watch:** only about 70 MB of host (flexible) memory is free. The old "all threads 100%" figure came from a
   process clock that is not meaningful on PS5; v14 uses getrusage plus per-thread clocks.
 

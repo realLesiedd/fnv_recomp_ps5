@@ -42,6 +42,11 @@ fnv_recomp stands on the work of these projects and people. Thank you.
 - **[dr_mp3](https://github.com/mackron/dr_libs)** (David Reid, public domain or MIT-0; based on
   [minimp3](https://github.com/lieff/minimp3) by lieff): decodes the MP3 music behind DirectShow (`rt/dshow.c`).
   Bundled unmodified in `third_party/`.
+- **[FFmpeg](https://ffmpeg.org/)** (the FFmpeg developers, LGPL 2.1 or later): its Bink video and Bink audio
+  decoders play the intro movie behind the binkw32 calls (`rt/bink.c`). Linked as libraries: on PS5 the static
+  libavcodec/libavutil from the ps5-payload-dev PacBrew packages, on Linux the system's shared libraries. The
+  Bink container is parsed in `rt/bink.c`. Under the LGPL you may relink the app against your own FFmpeg build:
+  the full source of everything else is in this repository and `ps5/build.sh` does the link.
 - **[Wine](https://www.winehq.org/)** (LGPL): its documentation of DirectSound and WINMM mmio behaviour was the
   reference for corner cases in `rt/dsound.c` and `rt/mmio.c` (no Wine code is used).
 

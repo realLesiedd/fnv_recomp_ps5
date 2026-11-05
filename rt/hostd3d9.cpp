@@ -92,8 +92,10 @@ extern "C" void hb_create_device(void) {
   rt_log("GPU backend: device %ux%u ready", pp.BackBufferWidth, pp.BackBufferHeight);
 }
 
+static void movie_release(void);
 extern "C" void hb_reset(void) {
   if (!g_dev) return;
+  movie_release(); /* a D3DPOOL_DEFAULT surface: must go before Reset */
   if (g_host_bb) { g_host_bb->Release(); g_host_bb = NULL; }
   if (g_host_depth) { g_host_depth->Release(); g_host_depth = NULL; }
   D3DPRESENT_PARAMETERS pp;
@@ -466,6 +468,54 @@ extern "C" void hb_colorfill(u32 surf, u32 rect, u32 color) {
   if (!s) return;
   RECT r;
   g_dev->ColorFill(s, rect_from(rect, &r), color);
+}
+
+/* A Bink movie (bink.c) is drawn over the whole frame here, scaled to fit, before presenting: the game draws it as
+   fixed-function textured tiles, which came out black through this backend. */
+extern "C" int bink_picture(const u32 **px, int *w, int *h, unsigned *serial);
+static IDirect3DSurface9 *g_movie;
+static int g_movie_w, g_movie_h;
+static unsigned g_movie_serial;
+static void movie_release(void) {
+  if (g_movie) { g_movie->Release(); g_movie = NULL; }
+}
+static void movie_overlay(void) {
+  const u32 *px;
+  int w, h;
+  unsigned serial;
+  if (!bink_picture(&px, &w, &h, &serial)) { movie_release(); return; }
+  if (!g_movie || w != g_movie_w || h != g_movie_h) {
+    movie_release();
+    if (FAILED(g_dev->CreateOffscreenPlainSurface(w, h, D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &g_movie, NULL))) {
+      static int warned;
+      if (!warned++) rt_log("GPU backend: no surface for the movie");
+      g_movie = NULL;
+      return;
+    }
+    g_movie_w = w; g_movie_h = h; g_movie_serial = serial - 1;
+  }
+  if (serial != g_movie_serial) {
+    D3DLOCKED_RECT lr;
+    if (SUCCEEDED(g_movie->LockRect(&lr, NULL, 0))) {
+      for (int y = 0; y < h; y++) memcpy((char *)lr.pBits + (size_t)y * lr.Pitch, px + (size_t)y * w, (size_t)w * 4);
+      g_movie->UnlockRect();
+    }
+    g_movie_serial = serial;
+  }
+  D3DSURFACE_DESC bd;
+  if (!g_host_bb || FAILED(g_host_bb->GetDesc(&bd))) return;
+  /* fit, keeping the movie's shape; the game has already cleared the frame to black */
+  LONG W = bd.Width, H = bd.Height, dw = W, dh = (LONG)((long long)W * h / w);
+  if (dh > H) { dh = H; dw = (LONG)((long long)H * w / h); }
+  RECT dst = {(W - dw) / 2, (H - dh) / 2, (W - dw) / 2 + dw, (H - dh) / 2 + dh};
+  g_dev->StretchRect(g_movie, NULL, g_host_bb, &dst, D3DTEXF_LINEAR);
+}
+
+/* called before the frame is presented (and before a test screenshot) */
+extern "C" void hb_movie_overlay(void) {
+  if (!g_dev) return;
+  if (g_in_scene) { g_dev->EndScene(); g_in_scene = false; }
+  movie_overlay();
 }
 
 extern "C" void hb_present(void) {

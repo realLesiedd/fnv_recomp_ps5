@@ -104,7 +104,7 @@ static int pad_script(PlatPad *p, u32 *packet) {
   if (!n) return 0;
   struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
   double now = ts.tv_sec + ts.tv_nsec / 1e9 - t0;
-  if (now < ev[0].t - 4) return 0; /* plugged in shortly before the first press, like a real pad */
+  /* connected from the start: the game only notices a newly connected pad about 10 s later */
   memset(p, 0, sizeof *p);
   for (int i = 0; i < n; i++) {
     if (ev[i].b == 0xA001 && now >= ev[i].t && now < ev[i].t + 3) p->ly = 32767;
@@ -145,18 +145,6 @@ API(gx_null) { RETURN_CDECL(0); }
 
 API(d_D3DPERF_SetOptions) { RETURN_STD(1, 0); }
 
-/* binkw32 (RAD Bink video: the intro movie and a few others). No decoder yet: BinkOpen
-   reports the movie as unavailable, which the game handles ("Could not open ... for
-   playback") by skipping it. */
-API(bk_BinkOpen) { rt_log("Bink: skipping movie %s (no video decoder yet)", ARG(0) ? STR(ARG(0)) : "?"); RETURN_STD(2, 0); }
-API(bk_BinkSetSoundSystem) { RETURN_STD(2, 1); }
-API(bk_BinkOpenDirectSound) { RETURN_STD(1, 0); }
-API(bk_BinkClose) { RETURN_STD(1, 0); }
-API(bk_BinkNextFrame) { RETURN_STD(1, 0); }
-API(bk_BinkWait) { RETURN_STD(1, 0); }
-API(bk_BinkPause) { RETURN_STD(2, 0); }
-API(bk_BinkDoFrame) { RETURN_STD(1, 0); }
-API(bk_BinkCopyToBufferRect) { RETURN_STD(11, 0); }
 
 static const ApiEntry list[] = {
   {"ADVAPI32.dll", "RegOpenKeyExA", a_RegOpenKeyExA}, {"ADVAPI32.dll", "RegCreateKeyExA", a_RegCreateKeyExA},
@@ -182,11 +170,6 @@ static const ApiEntry list[] = {
   {"GalaxyWrp.dll", "SteamUserStats", gx_null}, {"GalaxyWrp.dll", "SteamApps", gx_null},
   {"GalaxyWrp.dll", "SteamUtils", gx_null},
   {"d3d9.dll", "D3DPERF_SetOptions", d_D3DPERF_SetOptions},
-  {"binkw32.dll", "_BinkOpen@8", bk_BinkOpen}, {"binkw32.dll", "_BinkSetSoundSystem@8", bk_BinkSetSoundSystem},
-  {"binkw32.dll", "_BinkOpenDirectSound@4", bk_BinkOpenDirectSound}, {"binkw32.dll", "_BinkClose@4", bk_BinkClose},
-  {"binkw32.dll", "_BinkNextFrame@4", bk_BinkNextFrame}, {"binkw32.dll", "_BinkWait@4", bk_BinkWait},
-  {"binkw32.dll", "_BinkPause@8", bk_BinkPause}, {"binkw32.dll", "_BinkDoFrame@4", bk_BinkDoFrame},
-  {"binkw32.dll", "_BinkCopyToBufferRect@44", bk_BinkCopyToBufferRect},
   {0}};
 
 void misc_init(void) { api_register(list); }
