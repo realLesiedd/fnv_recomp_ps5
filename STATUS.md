@@ -73,7 +73,16 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   - Continue is not listed until a save exists.
 - **Diagnostics in fnv.log:** the release on the first line; a "perf:" line every 5 s (fps, frame times, CPU,
   memory, GPU memory); a stall report naming what each thread is doing if the game stops polling input.
-- **To watch:** only about 70 MB of host (flexible) memory is free, and one thread looks busy all the time.
+- **v14, memory and CPU:**
+  - D3D9 reference counting now follows D3D9. Binding drops the previous binding's reference, and a texture's
+    surfaces share its count. Before this, every texture ever drawn stayed alive: in a v11 log, video memory grew
+    from 682 to 1837 MB in three minutes of travel.
+  - Released D3D objects are freed. The object table grows in 32 KB chunks instead of a fixed 8 MB.
+  - DXVK uses 4 shader-compiler threads instead of 16.
+  - The perf line reports per-thread CPU, the three busiest threads, and live/created D3D objects.
+  - Startup logs the configured and free host (flexible) memory.
+- **To watch:** only about 70 MB of host (flexible) memory is free. The old "all threads 100%" figure came from a
+  process clock that is not meaningful on PS5; v14 uses getrusage plus per-thread clocks.
 
 ## Roadmap (the player's goals, in order)
 

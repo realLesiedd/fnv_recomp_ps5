@@ -25,9 +25,14 @@ static float asf(u32 v) { float f; memcpy(&f, &v, 4); return f; }
 #include <time.h>
 static void invalidate_cache(struct Obj *o);
 
+/* id -> Obj, in chunks allocated as ids are handed out (a flat table cost 8 MB of host memory up front);
+   chunks are never freed, so lookups need no lock */
 #define MAXOBJ (1 << 20)
-static Obj *g_obj[MAXOBJ];
+#define CHUNK 4096
+static Obj **g_objc[MAXOBJ / CHUNK];
 static int g_nobj = 1;
+int g_d3d_live; /* objects not yet released, for the perf line */
+int d3d_objects_created(void) { return g_nobj - 1; }
 static pthread_mutex_t g_obj_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static u32 new_obj(u32 vt, int kind, Obj **out) {
@@ -36,8 +41,10 @@ static u32 new_obj(u32 vt, int kind, Obj **out) {
   o->kind = kind; o->guest = g;
   pthread_mutex_lock(&g_obj_lock);
   int id = g_nobj++;
+  g_d3d_live++;
   if (id >= MAXOBJ) rt_fatal(NULL, "too many D3D objects");
-  g_obj[id] = o;
+  if (!g_objc[id / CHUNK]) g_objc[id / CHUNK] = calloc(CHUNK, sizeof(Obj *));
+  g_objc[id / CHUNK][id % CHUNK] = o;
   pthread_mutex_unlock(&g_obj_lock);
   M32(g + 8) = id;
   if (out) *out = o;
@@ -46,7 +53,8 @@ static u32 new_obj(u32 vt, int kind, Obj **out) {
 static Obj *obj(u32 g) {
   if (!g) return NULL;
   u32 id = M32(g + 8);
-  return id < MAXOBJ ? g_obj[id] : NULL;
+  Obj **ch = id < MAXOBJ ? g_objc[id / CHUNK] : NULL;
+  return ch ? ch[id % CHUNK] : NULL;
 }
 
 Obj *d3d_obj(u32 g) { return obj(g); }
@@ -62,19 +70,47 @@ static void free_storage(Obj *o) {
   invalidate_cache(o);
 }
 
-API(m_AddRef) { u32 g = COM_THIS; RETURN_STD(1, __atomic_add_fetch((u32 *)HP(g + 4), 1, __ATOMIC_SEQ_CST)); }
-API(m_Release) {
-  u32 g = COM_THIS;
-  u32 r = __atomic_sub_fetch((u32 *)HP(g + 4), 1, __ATOMIC_SEQ_CST);
-  if (r == 0) {
-    Obj *o = obj(g);
-    if (o && o->kind != K_DEVICE && o->kind != K_D3D) free_storage(o);
-  }
-  RETURN_STD(1, r);
-}
-API(m_QueryInterface) { u32 g = COM_THIS; M32(ARG(2)) = g; M32(g + 4)++; RETURN_STD(3, S_OK); }
-API(m_QINone) { M32(ARG(2)) = 0; RETURN_STD(3, E_NOINTERFACE); }
+/* Reference counts follow D3D9: a surface that belongs to a texture has no count of its own (AddRef and Release
+   go to the texture, so a bound surface keeps its texture alive), and the device holds a reference on everything
+   bound to it. When the count reaches zero the object and its GPU copy are freed. */
 static u32 g_device;
+static DevState *D;
+static u32 ref_owner(u32 g) {
+  Obj *o = obj(g);
+  return o && o->parent ? o->parent : g;
+}
+static u32 obj_addref(u32 g) { return __atomic_add_fetch((u32 *)HP(ref_owner(g) + 4), 1, __ATOMIC_SEQ_CST); }
+static void drop_obj(Obj *o) {
+  u32 id = M32(o->guest + 8);
+  pthread_mutex_lock(&g_obj_lock);
+  if (id < MAXOBJ && g_objc[id / CHUNK] && g_objc[id / CHUNK][id % CHUNK] == o) g_objc[id / CHUNK][id % CHUNK] = NULL;
+  g_d3d_live--;
+  pthread_mutex_unlock(&g_obj_lock);
+  free(o);
+}
+static void destroy_obj(u32 g) {
+  Obj *o = obj(g);
+  if (!o || o->kind == K_DEVICE || o->kind == K_D3D || o->kind == K_SWAP) return;
+  if (D && (g == D->backbuffer || g == D->depth)) return; /* the device's own */
+  for (int f = 0; f < 6; f++) /* a texture's surfaces go with it; their GPU copies hold the GPU texture */
+    for (int l = 0; l < MAXLVL; l++) {
+      Obj *s = o->sub[f][l] ? obj(o->sub[f][l]) : NULL;
+      o->sub[f][l] = 0;
+      if (s) { free_storage(s); drop_obj(s); }
+    }
+  free_storage(o);
+  drop_obj(o);
+}
+static u32 obj_release(u32 g) {
+  u32 t = ref_owner(g);
+  u32 r = __atomic_sub_fetch((u32 *)HP(t + 4), 1, __ATOMIC_SEQ_CST);
+  if (r == 0) destroy_obj(t);
+  return r;
+}
+API(m_AddRef) { RETURN_STD(1, obj_addref(COM_THIS)); }
+API(m_Release) { RETURN_STD(1, obj_release(COM_THIS)); }
+API(m_QueryInterface) { u32 g = COM_THIS; M32(ARG(2)) = g; obj_addref(g); RETURN_STD(3, S_OK); }
+API(m_QINone) { M32(ARG(2)) = 0; RETURN_STD(3, E_NOINTERFACE); }
 API(m_GetDevice) { M32(ARG(1)) = g_device; M32(g_device + 4)++; RETURN_STD(2, S_OK); }
 
 /* ---- formats --------------------------------------------------------------- */
@@ -164,7 +200,7 @@ API(s_UnlockRect) { RETURN_STD(1, S_OK); }
 API(s_GetContainer) {
   Obj *o = obj(COM_THIS);
   if (!o->parent) { M32(ARG(2)) = 0; RETURN_STD(3, E_NOINTERFACE); }
-  M32(ARG(2)) = o->parent; M32(o->parent + 4)++;
+  M32(ARG(2)) = o->parent; obj_addref(o->parent);
   RETURN_STD(3, S_OK);
 }
 API(s_GetDC) { M32(ARG(1)) = 0x50000; RETURN_STD(2, S_OK); }
@@ -213,7 +249,7 @@ static u32 child_surface(Obj *o, int face, u32 l) {
     Obj *s = obj(o->sub[face][l]); s->face = face; s->level = l;
   }
   u32 s = o->sub[face][l];
-  M32(s + 4)++;
+  obj_addref(s); /* counts on the texture */
   return s;
 }
 static void lock_level(Obj *o, int face, u32 l, u32 lr, u32 rc) {
@@ -389,17 +425,18 @@ static const ComMethod sb_methods[] = {
 };
 
 /* ---- device ---------------------------------------------------------------- */
-static DevState *D;
 DevState *d3d_dev(void) { return D; }
 #include "d3d9_swr.inc"
 
+/* binding takes a reference and drops the one the slot held, as D3D9 does; never dropping it kept every texture
+   ever drawn with alive (guest and GPU memory grew as the player travelled) */
 static void set_ref(u32 *slot, u32 g) {
-  if (g) M32(g + 4)++;
-  /* the previous binding is intentionally not released: objects are freed by the game's own Release
-     calls, and keeping bound objects alive avoids use-after-free if the game drops them while bound */
+  if (g) obj_addref(g);
+  u32 old = *slot;
   *slot = g;
+  if (old) obj_release(old);
 }
-static void get_ref(u32 out, u32 g) { M32(out) = g; if (g) M32(g + 4)++; }
+static void get_ref(u32 out, u32 g) { M32(out) = g; if (g) obj_addref(g); }
 
 API(d_QueryInterface) { M32(ARG(2)) = 0; RETURN_STD(3, E_NOINTERFACE); }
 API(d_TestCooperativeLevel) { RETURN_STD(1, S_OK); }
@@ -421,9 +458,10 @@ static void make_backbuffers(void) {
   D->pp[0] = w; D->pp[1] = h;
   if (!D->pp[2]) D->pp[2] = 22;
   D->backbuffer = make_surface(w, h, D->pp[2], 1, 0, 0, 0, 0);
-  D->rt[0] = D->backbuffer;
+  D->rt[0] = D->backbuffer; obj_addref(D->backbuffer); /* earlier bindings are left alone (kept) */
   D->depth = D->pp[9] ? make_surface(w, h, D->pp[10], 2, 0, 0, 0, 0) : 0;
   D->ds = D->depth;
+  if (D->depth) obj_addref(D->depth);
   D->viewport[0] = 0; D->viewport[1] = 0; D->viewport[2] = w; D->viewport[3] = h;
   float zn = 0, zf = 1; memcpy(&D->viewport[4], &zn, 4); memcpy(&D->viewport[5], &zf, 4);
   D->scissor[2] = w; D->scissor[3] = h;
@@ -538,8 +576,8 @@ static u32 prim_vertices(u32 type, u32 n) {
 }
 API(d_DrawPrimitive) { dump_draw("DrawPrimitive", ARG(1), ARG(3)); if (hb_active()) hb_draw(ARG(1), 0, 0, 0, ARG(2), ARG(3), 0, 0, 0, 0, 0); else swr_draw(ARG(1), 0, 0, 0, ARG(2), ARG(3), 0, 0, 0, 0); be_draw(ARG(3)); RETURN_STD(4, S_OK); }
 API(d_DrawIndexedPrimitive) { dump_draw("DrawIndexedPrimitive", ARG(1), ARG(6)); if (hb_active()) hb_draw(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6), 0, 0, 0, 0, 1); else swr_draw(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6), 0, 0, 0, 0); be_draw(ARG(6)); RETURN_STD(7, S_OK); }
-API(d_DrawPrimitiveUP) { (void)prim_vertices; dump_draw("DrawPrimitiveUP", ARG(1), ARG(2)); if (hb_active()) hb_draw(ARG(1), 0, 0, 0, 0, ARG(2), 0, 0, ARG(3), ARG(4), 0); else swr_draw(ARG(1), 0, 0, 0, 0, ARG(2), 0, 0, ARG(3), ARG(4)); be_draw(ARG(2)); D->stream[0] = 0; RETURN_STD(5, S_OK); }
-API(d_DrawIndexedPrimitiveUP) { dump_draw("DrawIndexedPrimitiveUP", ARG(1), ARG(4)); if (hb_active()) hb_draw(ARG(1), 0, ARG(2), ARG(3), 0, ARG(4), ARG(5), ARG(6), ARG(7), ARG(8), 1); else swr_draw(ARG(1), 0, ARG(2), ARG(3), 0, ARG(4), ARG(5), ARG(6), ARG(7), ARG(8)); be_draw(ARG(4)); D->stream[0] = 0; D->indices = 0; RETURN_STD(9, S_OK); }
+API(d_DrawPrimitiveUP) { (void)prim_vertices; dump_draw("DrawPrimitiveUP", ARG(1), ARG(2)); if (hb_active()) hb_draw(ARG(1), 0, 0, 0, 0, ARG(2), 0, 0, ARG(3), ARG(4), 0); else swr_draw(ARG(1), 0, 0, 0, 0, ARG(2), 0, 0, ARG(3), ARG(4)); be_draw(ARG(2)); set_ref(&D->stream[0], 0); RETURN_STD(5, S_OK); }
+API(d_DrawIndexedPrimitiveUP) { dump_draw("DrawIndexedPrimitiveUP", ARG(1), ARG(4)); if (hb_active()) hb_draw(ARG(1), 0, ARG(2), ARG(3), 0, ARG(4), ARG(5), ARG(6), ARG(7), ARG(8), 1); else swr_draw(ARG(1), 0, ARG(2), ARG(3), 0, ARG(4), ARG(5), ARG(6), ARG(7), ARG(8)); be_draw(ARG(4)); set_ref(&D->stream[0], 0); set_ref(&D->indices, 0); RETURN_STD(9, S_OK); }
 API(d_CreateVertexDeclaration) {
   u32 p = ARG(1), n = 0;
   while (M8(p + 8 * n) != 0xff && n < 64) n++;

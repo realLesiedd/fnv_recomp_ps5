@@ -560,7 +560,13 @@ u32 rt_thread_create(Ctx *parent, u32 start, u32 param, u32 stack, u32 flags, u3
   snprintf(o->name, sizeof o->name, "guest %08x", start);
   /* host stack: recompiled frames are larger than guest frames, so ask for a big one, but
      on the PS5 thread stacks come from the small flexible budget: step down until it fits */
+#ifdef __PROSPERO__
+  /* the PS5 refuses every explicit size here (16 MB down to 1 MB); recompiled code needs about 20 KB of host
+     stack (measured with FNV_STACK_STATS), so take the system default straight away */
+  static const size_t sizes[] = {0, 0, 0, 0, 0, 0};
+#else
   static const size_t sizes[] = {16u << 20, 8u << 20, 4u << 20, 2u << 20, 1u << 20, 0};
+#endif
   pthread_t th;
   int err = -1;
   size_t used = 0;

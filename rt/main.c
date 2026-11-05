@@ -23,7 +23,7 @@
 #include <ucontext.h>
 #endif
 
-#define FNV_RELEASE "v13" /* printed at the top of the log so a log shows which build produced it */
+#define FNV_RELEASE "v14" /* printed at the top of the log so a log shows which build produced it */
 
 int g_trace;
 u32 g_peb;
@@ -238,11 +238,44 @@ Ctx *rt_new_ctx(u32 stack_size) {
   return c;
 }
 
+/* FNV_STACK_STATS (Linux test runs): each thread paints its unused stack at start; the heartbeat reports the
+   deepest point any thread has reached, to size host stacks with a known margin */
+static u8 *volatile g_stk_lo[MAXTHR], *volatile g_stk_hi[MAXTHR];
+static int stack_stats(void) { static int on = -1; if (on < 0) on = getenv("FNV_STACK_STATS") != NULL; return on; }
+static void stack_paint(int ti) {
+#ifdef __linux__
+  pthread_attr_t a;
+  void *base;
+  size_t size;
+  if (pthread_getattr_np(pthread_self(), &a)) return;
+  pthread_attr_getstack(&a, &base, &size);
+  pthread_attr_destroy(&a);
+  u8 *lo = (u8 *)base + 64 * 1024, *sp = (u8 *)__builtin_frame_address(0) - 16 * 1024; /* skip guard, stay off our frame */
+  if (sp > lo) memset(lo, 0xA5, sp - lo);
+  g_stk_lo[ti] = lo;
+  g_stk_hi[ti] = (u8 *)base + size;
+#else
+  (void)ti;
+#endif
+}
+static void stack_report(void) {
+  char b[700];
+  int o = snprintf(b, sizeof b, "stack use (KB, peak):");
+  for (int t = 0; t < MAXTHR && o < (int)sizeof b - 24; t++) {
+    u8 *lo = g_stk_lo[t], *hi = g_stk_hi[t];
+    if (!lo) continue;
+    u8 *p = lo;
+    while (p < hi && *p == 0xA5) p++;
+    o += snprintf(b + o, sizeof b - o, " t%d:%ld", t, (long)((hi - p) >> 10));
+  }
+  rt_log("%s", b);
+}
 void rt_bind_thread(Ctx *c) {
   t_ctx = c;
   int ti = c->thread_index & (MAXTHR - 1);
   g_pth[ti] = pthread_self();
   g_pth_set[ti] = 1;
+  if (stack_stats()) stack_paint(ti);
 }
 
 /* every TEB ever created (they are never freed), so TLS slots can be cleared in all threads */
@@ -407,6 +440,20 @@ void rt_perf_frame(double present_ms) {
   if (cpu >= 0) { g_t0_cpu = cpu; g_t0_cpu_wall = now; }
   pthread_mutex_unlock(&g_perf_lock);
 }
+/* CPU used by each guest thread since the last perf line (pthread_getcpuclockid), and the whole process
+   (getrusage), so a busy thread shows up by name */
+#include <sys/resource.h>
+static double thread_cpu(int t) {
+  clockid_t id;
+  struct timespec ts;
+  if (!g_pth_set[t] || pthread_getcpuclockid(g_pth[t], &id) || clock_gettime(id, &ts)) return -1;
+  return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+static double process_cpu(void) {
+  struct rusage ru;
+  if (getrusage(RUSAGE_SELF, &ru)) return -1;
+  return ru.ru_utime.tv_sec + ru.ru_utime.tv_usec / 1e6 + ru.ru_stime.tv_sec + ru.ru_stime.tv_usec / 1e6;
+}
 static int cmp_float(const void *a, const void *b) { float x = *(const float *)a, y = *(const float *)b; return (x > y) - (x < y); }
 static void perf_line(void) {
   static float ft[PERF_MAX];
@@ -419,7 +466,7 @@ static void perf_line(void) {
   g_present_sum = 0;
   g_present_n = 0;
   pthread_mutex_unlock(&g_perf_lock);
-  char b[768];
+  char b[1024];
   int o = 0;
   if (n) {
     qsort(ft, n, sizeof *ft, cmp_float);
@@ -432,9 +479,30 @@ static void perf_line(void) {
   if (t0 >= 0 && prev_t0 >= 0 && t0w > prev_t0_wall)
     o += snprintf(b + o, sizeof b - o, "; main thread CPU %.0f%%", 100.0 * (t0 - prev_t0) / (t0w - prev_t0_wall));
   if (t0w > prev_t0_wall) { prev_t0 = t0; prev_t0_wall = t0w; }
-  double pc = cpu_clock(CLOCK_PROCESS_CPUTIME_ID), wall = mono_now();
-  if (pc >= 0 && prev_proc >= 0 && wall > prev_wall)
-    o += snprintf(b + o, sizeof b - o, ", all threads %.0f%%", 100.0 * (pc - prev_proc) / (wall - prev_wall));
+  double pc = process_cpu(), wall = mono_now(), span = wall - prev_wall;
+  static double prev_t[MAXTHR];
+  double guest = 0, pct[MAXTHR];
+  int busiest[3] = {-1, -1, -1};
+  for (int t = 0; t < MAXTHR; t++) {
+    double now_t = thread_cpu(t);
+    pct[t] = now_t >= 0 && prev_t[t] > 0 && span > 0 ? 100.0 * (now_t - prev_t[t]) / span : -1;
+    if (now_t >= 0) prev_t[t] = now_t;
+    if (pct[t] < 0) continue;
+    guest += pct[t];
+    for (int k = 0; k < 3; k++)
+      if (busiest[k] < 0 || pct[t] > pct[busiest[k]]) {
+        for (int j = 2; j > k; j--) busiest[j] = busiest[j - 1];
+        busiest[k] = t;
+        break;
+      }
+  }
+  if (pc >= 0 && prev_proc >= 0 && span > 0) {
+    double all = 100.0 * (pc - prev_proc) / span;
+    o += snprintf(b + o, sizeof b - o, ", process %.0f%% (game threads %.0f%%, other threads %.0f%%; busiest", all, guest,
+                  all - guest > 0 ? all - guest : 0);
+    for (int k = 0; k < 3 && busiest[k] >= 0; k++) o += snprintf(b + o, sizeof b - o, " t%d %.0f%%", busiest[k], pct[busiest[k]]);
+    o += snprintf(b + o, sizeof b - o, ")");
+  }
   prev_proc = pc;
   prev_wall = wall;
   o += snprintf(b + o, sizeof b - o, "; game RAM %llu MB", (unsigned long long)(g_guest_backed >> 20));
@@ -447,6 +515,8 @@ static void perf_line(void) {
   if (f && fscanf(f, "%lu %lu", &vsz, &rss) == 2) o += snprintf(b + o, sizeof b - o, ", process RSS %lu MB", rss * 4096 >> 20);
   if (f) fclose(f);
 #endif
+  extern int g_d3d_live, d3d_objects_created(void);
+  o += snprintf(b + o, sizeof b - o, "; D3D objects %d live, %d created", g_d3d_live, d3d_objects_created());
   char g[320];
   if (hb_gpu_mem(g, sizeof g) > 0) o += snprintf(b + o, sizeof b - o, "; GPU %s", g);
   rt_log("perf: %s", b);
@@ -454,7 +524,8 @@ static void perf_line(void) {
 
 /* FNV_API_STATS: every 30 s, the 20 most called system functions and their calls per second */
 static void api_stats(double interval) {
-  static u64 prev[THUNK_MAX], d[THUNK_MAX]; /* static: too big for the heartbeat thread's stack */
+  static u64 *prev, *d; /* allocated on first use: too big for the heartbeat stack, and unused unless enabled */
+  if (!prev) { prev = calloc(THUNK_MAX, sizeof *prev); d = calloc(THUNK_MAX, sizeof *d); }
   int n = g_thunk_count, top[20], nt = 0;
   u64 total = 0;
   for (int i = 0; i < n; i++) { d[i] = g_thunk_calls[i] - prev[i]; prev[i] = g_thunk_calls[i]; total += d[i]; }
@@ -508,6 +579,7 @@ static void *heartbeat(void *arg) {
     static int stats = -1;
     if (stats < 0) stats = getenv("FNV_API_STATS") != NULL;
     if (stats && n % 30 == 29) api_stats(30.0);
+    if (stack_stats() && n % 30 == 29) stack_report();
     last_frames = fr; last_read = rd;
     /* 15 s without a controller poll while frames were being drawn: report (at most every 30 s, 6 times) */
     static u64 last_pad;
@@ -554,6 +626,12 @@ int main(int argc, char **argv) {
   rt_realpath(user, g_user_dir, sizeof g_user_dir);
 
   rt_log("fnv_recomp %s", FNV_RELEASE);
+#ifdef __PROSPERO__
+  size_t flex_total = 0, flex_free = 0;
+  sceKernelConfiguredFlexibleMemorySize(&flex_total);
+  sceKernelAvailableFlexibleMemorySize(&flex_free);
+  rt_log("host (flexible) memory: %zu MB configured, %zu MB free at start", flex_total >> 20, flex_free >> 20);
+#endif
   struct sigaction ss = {0};
   ss.sa_sigaction = on_sample;
   ss.sa_flags = SA_SIGINFO | SA_RESTART;
