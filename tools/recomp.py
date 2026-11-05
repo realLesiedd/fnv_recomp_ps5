@@ -1180,6 +1180,27 @@ def worker_init(exe, starts):
     _W['em'] = Emitter(Image(exe), starts)
 
 
+# Game functions the runtime replaces (rt/hooks.c). The original body is still emitted, as o_XXXXXXXX, and
+# f_XXXXXXXX forwards to the runtime's h_XXXXXXXX, which may call it. Keep this list short: each entry is a
+# deliberate departure from the original exe.
+HOOKS = {
+    0x7CBAF0,  # StartMenu init: leave Continue off the main menu while there are no saves
+    0x7CFD20,  # re-enables the Continue/Load tiles: tolerate the Continue tile not existing
+}
+
+
+def write_if_changed(path, text):
+    """Leave an identical file untouched so incremental builds skip it."""
+    try:
+        with open(path) as fh:
+            if fh.read() == text:
+                return
+    except OSError:
+        pass
+    with open(path, 'w') as fh:
+        fh.write(text)
+
+
 def emit_chunk(args):
     items, out = args
     em = _W['em']
@@ -1189,17 +1210,20 @@ def emit_chunk(args):
     for f, info in items:
         body = em.function(f, info)
         unimpl += body.count('rt_unimpl(c,') - body.count('"divide by zero"')
+        if f in HOOKS:
+            body = body.replace('void %s(' % fn(f), 'void o_%08X(' % f, 1)
+            body += '\nvoid h_%08X(Ctx *restrict c);\nvoid %s(Ctx *restrict c){h_%08X(c);}' % (f, fn(f), f)
         bodies.append(body)
     for f, info in items:
         decls.add(f)
     # declarations of every function referenced
     refs = set(int(x, 16) for b in bodies for x in re.findall(r'\bf_([0-9A-F]{8})\(c\)', b))
-    with open(out, 'w') as fh:
-        fh.write(HEADER)
-        for r in sorted(refs | decls):
-            fh.write('void %s(Ctx *restrict c);\n' % fn(r))
-        for b in bodies:
-            fh.write(b + '\n')
+    text = [HEADER]
+    for r in sorted(refs | decls):
+        text.append('void %s(Ctx *restrict c);\n' % fn(r))
+    for b in bodies:
+        text.append(b + '\n')
+    write_if_changed(out, ''.join(text))
     return unimpl
 
 
@@ -1256,14 +1280,16 @@ def main():
         unimpl = sum(pool.map(emit_chunk, jobs, chunksize=1))
     print('unsupported instruction sites:', unimpl)
 
-    with open(os.path.join(a.out, 'table.c'), 'w') as fh:
-        fh.write('#include "../rt/x86.h"\n')
-        for f in order:
-            fh.write('void %s(Ctx *restrict c);\n' % fn(f))
-        fh.write('const u32 g_func_addr[] = {\n%s};\n' % ',\n'.join('0x%xu' % f for f in order))
-        fh.write('GuestFn const g_func_ptr[] = {\n%s};\n' % ',\n'.join(fn(f) for f in order))
-        fh.write('const u32 g_func_count = %d;\n' % len(order))
-    with open(os.path.join(a.out, 'image.c'), 'w') as fh:
+    t = ['#include "../rt/x86.h"\n']
+    for f in order:
+        t.append('void %s(Ctx *restrict c);\n' % fn(f))
+    t.append('const u32 g_func_addr[] = {\n%s};\n' % ',\n'.join('0x%xu' % f for f in order))
+    t.append('GuestFn const g_func_ptr[] = {\n%s};\n' % ',\n'.join(fn(f) for f in order))
+    t.append('const u32 g_func_count = %d;\n' % len(order))
+    write_if_changed(os.path.join(a.out, 'table.c'), ''.join(t))
+    import io
+    fh = io.StringIO()
+    if True:
         fh.write('#include "../rt/loader.h"\n')
         fh.write('const ImageSection g_sections[] = {\n')
         for s in img.sections:
@@ -1279,6 +1305,7 @@ def main():
         fh.write('const u32 g_tls_start = 0x%xu, g_tls_end = 0x%xu, g_tls_index_addr = 0x%xu;\n' % t[:3])
         fh.write('const u32 g_image_size = 0x%xu;\n' % img.pe.OPTIONAL_HEADER.SizeOfImage)
         fh.write('const u32 g_stack_reserve = 0x%xu;\n' % img.pe.OPTIONAL_HEADER.SizeOfStackReserve)
+    write_if_changed(os.path.join(a.out, 'image.c'), fh.getvalue())
 
 
 if __name__ == '__main__':

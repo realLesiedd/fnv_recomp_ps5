@@ -1,0 +1,57 @@
+/* Deliberate departures from the original exe. Each function here replaces one game function listed in
+ * HOOKS in tools/recomp.py; the original stays callable as o_XXXXXXXX. */
+#include "rt.h"
+#include <dirent.h>
+
+void o_007CBAF0(Ctx *restrict c);
+void o_007CFD20(Ctx *restrict c);
+
+/* Same test the start menu itself makes: any *.fos in the save folder. */
+static int saves_exist(void) {
+  char hp[2048];
+  if (fs_host_path("C:\\Users\\Player\\Documents\\My Games\\FalloutNV\\Saves", hp, sizeof hp)) return 0;
+  DIR *d = opendir(hp);
+  if (!d) return 0;
+  struct dirent *e;
+  int found = 0;
+  while (!found && (e = readdir(d))) found = rt_wildmatch("*.fos", e->d_name);
+  closedir(d);
+  return found;
+}
+
+/* Start menu option list (BSSimpleArray<Option*>: +4 data, +8 count); Option: +8 action callback,
+ * +0xC flags (bit 0 = listed on the main menu, bit 1 = listed in game). */
+#define START_MENU_OPTIONS 0x11DAB88u
+#define OPTION_CONTINUE    0x7D0440u /* asks "Continue from your last saved game?"; 0x7D0680 is Load */
+
+/* StartMenu init (thiscall: bool inGame, bool forceReload). The original exe lists Continue on the main
+ * menu even with no saves (dimmed, then re-enabled by 0x7CFD20). Leave it off the list until a save exists. */
+void h_007CBAF0(Ctx *restrict c) {
+  static u32 hidden; /* Continue options we unlisted, so they can be listed again */
+  int in_game = M8(c->r[4] + 4) != 0;
+  if (!in_game) {
+    int have = saves_exist();
+    u32 data = M32(START_MENU_OPTIONS + 4), n = M32(START_MENU_OPTIONS + 8);
+    for (u32 i = 0; i < n && i < 64; i++) {
+      u32 opt = M32(data + 4 * i);
+      if (!opt || M32(opt + 8) != OPTION_CONTINUE) continue;
+      if (!have && (M32(opt + 12) & 1)) { M32(opt + 12) &= ~1u; hidden |= 1u << (i & 31); }
+      else if (have && (hidden & (1u << (i & 31)))) { M32(opt + 12) |= 1; hidden &= ~(1u << (i & 31)); }
+    }
+    rt_log("main menu: %s", have ? "saves found, Continue listed" : "no saves, Continue not listed");
+  }
+  o_007CBAF0(c);
+}
+
+/* Sets _enabled on the Continue (+0x1C4) and Load (+0x1C0) tiles. With Continue unlisted its tile is NULL;
+ * point it at the other tile for the duration of the call. */
+void h_007CFD20(Ctx *restrict c) {
+  u32 self = c->r[1], cont = M32(self + 0x1C4), load = M32(self + 0x1C0);
+  if (cont && load) { o_007CFD20(c); return; }
+  if (!cont && !load) { c->r[4] += 4; return; } /* neither tile: just return (plain ret) */
+  M32(self + 0x1C4) = cont ? cont : load;
+  M32(self + 0x1C0) = load ? load : cont;
+  o_007CFD20(c);
+  M32(self + 0x1C4) = cont;
+  M32(self + 0x1C0) = load;
+}
