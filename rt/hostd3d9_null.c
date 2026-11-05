@@ -13,3 +13,4 @@ void hb_colorfill(u32 surf, u32 rect, u32 color) {}
 void hb_present(void) {}
 void hb_readback(Obj *src, Obj *dst) {}
 void hb_release(Obj *o) { o->host = 0; }
+int hb_gpu_mem(char *out, int cap) { (void)out; (void)cap; return 0; }

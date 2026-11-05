@@ -495,3 +495,76 @@ extern "C" void hb_readback(Obj *src, Obj *dst) {
   }
   sys->Release();
 }
+
+/* ---- GPU memory use per Vulkan heap, for the perf log line ---------------------------------------
+ * DXVK's interop interface (ID3D9VkInteropInterface) gives the Vulkan instance and physical device; the
+ * driver's VK_EXT_memory_budget reports usage and budget per heap. The few Vulkan structures needed are
+ * declared here with the layouts and values of vulkan_core.h. */
+#include <stdint.h>
+typedef void *VkInst_;
+typedef void *VkPhys_;
+struct VkMemType_ { uint32_t flags, heap; };
+struct VkMemHeap_ { uint64_t size; uint32_t flags; };
+struct VkMemProps_ { uint32_t type_count; VkMemType_ types[32]; uint32_t heap_count; VkMemHeap_ heaps[16]; };
+struct VkMemProps2_ { uint32_t stype; void *next; VkMemProps_ props; };          /* ..._MEMORY_PROPERTIES_2 */
+struct VkMemBudget_ { uint32_t stype; void *next; uint64_t budget[16], usage[16]; }; /* ..._MEMORY_BUDGET_PROPERTIES_EXT */
+typedef void (*VkVoidFn_)(void);
+typedef VkVoidFn_ (*VkGipa_)(VkInst_, const char *);
+typedef void (*VkMemProps2Fn_)(VkPhys_, VkMemProps2_ *);
+static_assert(sizeof(VkMemProps_) == 520, "VkPhysicalDeviceMemoryProperties layout");
+
+struct VkInterop_ : public IUnknown { /* ID3D9VkInteropInterface */
+  virtual void STDMETHODCALLTYPE GetInstanceHandle(VkInst_ *instance) = 0;
+  virtual void STDMETHODCALLTYPE GetPhysicalDeviceHandle(UINT adapter, VkPhys_ *phys) = 0;
+};
+static const GUID IID_VkInterop_ = {0x3461a81b, 0xce41, 0x485b, {0xb6, 0xb5, 0xfc, 0xf0, 0x8b, 0xa6, 0xa6, 0xbd}};
+
+#ifdef __PROSPERO__
+extern "C" VkVoidFn_ vk_icdGetInstanceProcAddr(VkInst_ instance, const char *name); /* RADV, linked in */
+static VkGipa_ vk_gipa(void) { return vk_icdGetInstanceProcAddr; }
+#else
+#include <dlfcn.h>
+static VkGipa_ vk_gipa(void) {
+  void *h = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_NOLOAD);
+  if (!h) h = dlopen("libvulkan.so.1", RTLD_NOW);
+  return h ? (VkGipa_)dlsym(h, "vkGetInstanceProcAddr") : NULL;
+}
+#endif
+
+extern "C" int hb_gpu_mem(char *out, int cap) {
+  static VkMemProps2Fn_ props2;
+  static VkPhys_ phys;
+  static int tried;
+  if (!g_d3d || g_active != 1) return 0;
+  if (!tried) {
+    tried = 1;
+    VkInterop_ *it = NULL;
+    VkInst_ inst = NULL;
+    if (SUCCEEDED(g_d3d->QueryInterface(IID_VkInterop_, (void **)&it)) && it) {
+      it->GetInstanceHandle(&inst);
+      it->GetPhysicalDeviceHandle(0, &phys);
+      it->Release();
+    }
+    VkGipa_ gipa = vk_gipa();
+    if (gipa && inst && phys) {
+      props2 = (VkMemProps2Fn_)gipa(inst, "vkGetPhysicalDeviceMemoryProperties2");
+      if (!props2) props2 = (VkMemProps2Fn_)gipa(inst, "vkGetPhysicalDeviceMemoryProperties2KHR");
+    }
+    if (!props2) rt_log("perf: GPU memory figures unavailable (no Vulkan memory query)");
+  }
+  if (!props2) return 0;
+  VkMemBudget_ b;
+  VkMemProps2_ p;
+  memset(&b, 0, sizeof b);
+  memset(&p, 0, sizeof p);
+  b.stype = 1000237000;
+  p.stype = 1000059006;
+  p.next = &b;
+  props2(phys, &p);
+  int o = 0;
+  for (uint32_t h = 0; h < p.props.heap_count && h < 16 && o < cap - 64; h++)
+    o += snprintf(out + o, cap - o, "%sheap%u %s %llu/%llu MB", h ? ", " : "", h,
+                  (p.props.heaps[h].flags & 1) ? "(VRAM)" : "(system)", (unsigned long long)(b.usage[h] >> 20),
+                  (unsigned long long)(b.budget[h] >> 20));
+  return o;
+}

@@ -22,6 +22,7 @@ static float asf(u32 v) { float f; memcpy(&f, &v, 4); return f; }
 
 /* ---- objects --------------------------------------------------------------- */
 #include "d3d9_internal.h"
+#include <time.h>
 static void invalidate_cache(struct Obj *o);
 
 #define MAXOBJ (1 << 20)
@@ -111,7 +112,11 @@ u64 g_d3d_frames;
 static void be_present(void) {
   g_d3d_frames = g_frames + 1;
   be_present_shot();
+  struct timespec p0, p1;
+  clock_gettime(CLOCK_MONOTONIC, &p0);
   be_platform_present();
+  clock_gettime(CLOCK_MONOTONIC, &p1);
+  rt_perf_frame((p1.tv_sec - p0.tv_sec) * 1e3 + (p1.tv_nsec - p0.tv_nsec) / 1e6);
   g_frames++;
   if (g_frames == 1 || (g_frames % 300) == 0)
     rt_log("D3D9: frame %llu presented (%llu draw calls, %llu primitives so far)",

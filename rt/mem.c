@@ -74,6 +74,7 @@ void mem_init(void) {
   if (!p) { perror("reserving the 4 GiB guest window"); exit(2); }
   g_guest_mem = p;
   commit(IMAGE_BASE, (g_image_size + GRAN - 1) & ~(GRAN - 1));
+  g_guest_backed += (g_image_size + GRAN - 1) & ~(GRAN - 1);
   /* the image range is reserved */
   for (u32 a = IMAGE_BASE; a < IMAGE_BASE + g_image_size; a += GRAN) g_owner[a / GRAN] = IMAGE_BASE + 1;
   g_rsize[IMAGE_BASE / GRAN] = (g_image_size + GRAN - 1) & ~(GRAN - 1);
@@ -85,10 +86,12 @@ static int range_free(u32 a, u32 n) {
   return 1;
 }
 
+u64 g_guest_backed; /* bytes of guest memory backed right now (reservations are backed when made) */
 static void reserve(u32 a, u32 n) {
   for (u32 g = a / GRAN; g < (a + n) / GRAN; g++) g_owner[g] = a + 1;
   g_rsize[a / GRAN] = n;
   commit(a, n);
+  g_guest_backed += n;
 }
 
 u32 vm_alloc(u32 addr, u32 size, u32 type, u32 prot) {
@@ -132,6 +135,7 @@ int vm_free(u32 addr, u32 size, u32 type) {
     if (type & 0x8000) { /* MEM_RELEASE */
       u32 base = g_owner[g] - 1, n = g_rsize[base / GRAN];
       fresh(base, n, PROT_NONE);
+      g_guest_backed -= n;
       for (u32 k = base / GRAN; k < (base + n) / GRAN; k++) g_owner[k] = 0;
       if (base < g_vm_hint) g_vm_hint = base < 0x02000000u ? 0x02000000u : base;
       ok = 1;

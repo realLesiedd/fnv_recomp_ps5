@@ -100,5 +100,8 @@ void rt_exit(int code) __attribute__((noreturn));
 
 /* counters for the heartbeat log line */
 extern u64 g_stat_valloc, g_stat_opens, g_stat_read;
+extern u64 g_guest_backed;                 /* bytes of guest memory backed (mem.c) */
+void rt_perf_frame(double present_ms);     /* a frame was presented; present_ms = time inside Present */
+int hb_gpu_mem(char *out, int cap);        /* GPU memory use per Vulkan heap, or 0 if unknown */
 extern u64 g_d3d_frames;
 void rt_heartbeat_start(void);

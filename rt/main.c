@@ -18,11 +18,12 @@
 #include <pthread.h>
 #ifdef __PROSPERO__
 #include <ps5platform/context.h> /* the console's ucontext layout (registers for the stall sampler) */
+#include <ps5platform/kernel.h>  /* sceKernelAvailableFlexibleMemorySize, for the perf line */
 #else
 #include <ucontext.h>
 #endif
 
-#define FNV_RELEASE "v9" /* printed at the top of the log so a log shows which build produced it */
+#define FNV_RELEASE "v10" /* printed at the top of the log so a log shows which build produced it */
 
 int g_trace;
 u32 g_peb;
@@ -383,6 +384,70 @@ static void stall_report(double stalled_for) {
     if (g_pth_set[t] && !g_in_api[t] && g_last_api[t]) sample_thread(t);
 }
 
+/* ---- performance: frame timing, CPU and memory; one "perf:" line per heartbeat ------------------- */
+#define PERF_MAX 4096
+static float g_ft[PERF_MAX]; /* frame-to-frame intervals (ms) in the current window */
+static int g_ftn;
+static double g_last_frame, g_present_sum, g_t0_cpu = -1, g_t0_cpu_wall;
+static int g_present_n;
+static pthread_mutex_t g_perf_lock = PTHREAD_MUTEX_INITIALIZER;
+static double cpu_clock(clockid_t id) { struct timespec t; return clock_gettime(id, &t) ? -1 : t.tv_sec + t.tv_nsec / 1e9; }
+void rt_perf_frame(double present_ms) {
+  double now = mono_now();
+  double cpu = t_ctx && t_ctx->thread_index == 0 ? cpu_clock(CLOCK_THREAD_CPUTIME_ID) : -1;
+  pthread_mutex_lock(&g_perf_lock);
+  if (g_last_frame > 0 && g_ftn < PERF_MAX) g_ft[g_ftn++] = (float)((now - g_last_frame) * 1000.0);
+  g_last_frame = now;
+  g_present_sum += present_ms;
+  g_present_n++;
+  if (cpu >= 0) { g_t0_cpu = cpu; g_t0_cpu_wall = now; }
+  pthread_mutex_unlock(&g_perf_lock);
+}
+static int cmp_float(const void *a, const void *b) { float x = *(const float *)a, y = *(const float *)b; return (x > y) - (x < y); }
+static void perf_line(void) {
+  static float ft[PERF_MAX];
+  static double prev_t0 = -1, prev_t0_wall, prev_proc = -1, prev_wall;
+  pthread_mutex_lock(&g_perf_lock);
+  int n = g_ftn;
+  memcpy(ft, g_ft, n * sizeof *ft);
+  g_ftn = 0;
+  double present = g_present_n ? g_present_sum / g_present_n : 0, t0 = g_t0_cpu, t0w = g_t0_cpu_wall;
+  g_present_sum = 0;
+  g_present_n = 0;
+  pthread_mutex_unlock(&g_perf_lock);
+  char b[768];
+  int o = 0;
+  if (n) {
+    qsort(ft, n, sizeof *ft, cmp_float);
+    double sum = 0;
+    for (int i = 0; i < n; i++) sum += ft[i];
+    double avg = sum / n;
+    o += snprintf(b + o, sizeof b - o, "%.1f fps; frame ms avg %.1f, p99 %.1f, worst %.1f; in Present %.1f ms", 1000.0 / avg,
+                  avg, ft[(int)(n * 0.99) < n ? (int)(n * 0.99) : n - 1], ft[n - 1], present);
+  } else o += snprintf(b + o, sizeof b - o, "no frames");
+  if (t0 >= 0 && prev_t0 >= 0 && t0w > prev_t0_wall)
+    o += snprintf(b + o, sizeof b - o, "; main thread CPU %.0f%%", 100.0 * (t0 - prev_t0) / (t0w - prev_t0_wall));
+  if (t0w > prev_t0_wall) { prev_t0 = t0; prev_t0_wall = t0w; }
+  double pc = cpu_clock(CLOCK_PROCESS_CPUTIME_ID), wall = mono_now();
+  if (pc >= 0 && prev_proc >= 0 && wall > prev_wall)
+    o += snprintf(b + o, sizeof b - o, ", all threads %.0f%%", 100.0 * (pc - prev_proc) / (wall - prev_wall));
+  prev_proc = pc;
+  prev_wall = wall;
+  o += snprintf(b + o, sizeof b - o, "; game RAM %llu MB", (unsigned long long)(g_guest_backed >> 20));
+#ifdef __PROSPERO__
+  size_t flex = 0;
+  if (sceKernelAvailableFlexibleMemorySize(&flex) == 0) o += snprintf(b + o, sizeof b - o, ", host memory free %zu MB", flex >> 20);
+#else
+  FILE *f = fopen("/proc/self/statm", "r");
+  unsigned long vsz, rss;
+  if (f && fscanf(f, "%lu %lu", &vsz, &rss) == 2) o += snprintf(b + o, sizeof b - o, ", process RSS %lu MB", rss * 4096 >> 20);
+  if (f) fclose(f);
+#endif
+  char g[320];
+  if (hb_gpu_mem(g, sizeof g) > 0) o += snprintf(b + o, sizeof b - o, "; GPU %s", g);
+  rt_log("perf: %s", b);
+}
+
 /* heartbeat: every 5 s, one log line with progress counters and any thread that has been
    inside a single system call for more than 2 s (where a stall is) */
 static void *heartbeat(void *arg) {
@@ -414,6 +479,7 @@ static void *heartbeat(void *arg) {
            (unsigned long long)fr, (unsigned long long)(fr - last_frames), (unsigned long long)g_stat_opens,
            rd / 1048576.0, (rd - last_read) / 1048576.0, (unsigned long long)g_stat_valloc, (unsigned long long)g_stat_pad,
            dsound_voices(), stuck[0] ? "; waiting in" : "", stuck);
+    perf_line();
     last_frames = fr; last_read = rd;
     /* 15 s without a controller poll while frames were being drawn: report (at most every 30 s, 6 times) */
     static u64 last_pad;
