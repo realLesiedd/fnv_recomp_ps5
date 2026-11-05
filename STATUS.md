@@ -80,6 +80,18 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
     dr_mp3.
 - Not yet: Bink video playback (intro movies are skipped).
 
+## Roadmap (the player's goals, in order)
+
+1. **The game runs reliably on PS5** (current focus): loading a save in the Mojave stalls on PS5 only (v10 logs a
+   stall report to find out why); remaining crashes as they are found.
+2. **Performance:** a steady 30 fps, then 60. Long-term goal: 4K at 120 fps, which also needs engine fixes for
+   frame rates above 60 and a 120 Hz display mode.
+3. **Native 4K rendering** and a resolution setting in the options menu.
+4. **Trophies** through [RecompTrophy](https://github.com/cptlamarca/RecompTrophy) (lamarking, GPL-3.0), as the
+   gta4-ps5 port does, driven by the game's achievement unlocks.
+5. **Full DualSense support:** PlayStation-style button prompts (original glyphs, not Sony's assets), haptics,
+   adaptive triggers and the light bar where they fit.
+
 ## GPU renderer (DXVK): working on Linux
 
 - `rt/hostd3d9.cpp` replays the D3D9 front end's draws on a DXVK device (Direct3D 9 on Vulkan).

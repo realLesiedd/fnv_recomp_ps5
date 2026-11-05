@@ -938,6 +938,12 @@ class Emitter:
             return 'M32(%s)=c->fcw;M32(%s+4)=fstsw(c);M32(%s+8)=0;' % (ea, ea, ea)
         if mn == 'fldenv':
             return 'c->fcw=M16(%s);c->fsw=M16(%s+4);c->top=(c->fsw>>11)&7;' % (ea, ea)
+        if mn in ('fnsave', 'fsave'):  # 28-byte environment, then ST(0)..ST(7) as 80-bit values; then finit
+            return ('{u32 a=%s;M32(a)=c->fcw;M32(a+4)=fstsw(c);M32(a+8)=c->ftw;M32(a+12)=0;M32(a+16)=0;M32(a+20)=0;'
+                    'M32(a+24)=0;for(int k=0;k<8;k++)st80(a+28+10*k,ST(k));c->fcw=0x37f;c->fsw=0;c->top=0;}' % ea)
+        if mn == 'frstor':
+            return ('{u32 a=%s;c->fcw=M16(a);c->fsw=M16(a+4);c->ftw=M16(a+8);c->top=(c->fsw>>11)&7;'
+                    'for(int k=0;k<8;k++)ST(k)=ld80(a+28+10*k);}' % ea)
         raise Unsupported('x87 ' + mn)
 
     # --- SSE
@@ -1118,6 +1124,11 @@ class Emitter:
             cnt = {'u': 4, 'q': 2, 'w': 8}[f]
             if n >= bits: return '%s.q[0]=0;%s.q[1]=0;' % (D(), D())
             return 'for(int k=0;k<%d;k++)%s.%s[k]%s=%d;' % (cnt, D(), f, e, n)
+        if mn in sh:  # count in the low 64 bits of an xmm register or a 128-bit memory operand
+            f, e, bits = sh[mn]
+            cnt = {'u': 4, 'q': 2, 'w': 8}[f]
+            return self.xsrc(i, ops[1]) + ('if(s.q[0]>=%d){%s.q[0]=0;%s.q[1]=0;}else{int n=(int)s.q[0];'
+                                           'for(int k=0;k<%d;k++)%s.%s[k]%s=n;}' % (bits, D(), D(), cnt, D(), f, e))
         pd = {'addpd': '+', 'subpd': '-', 'mulpd': '*', 'divpd': '/'}
         if mn in pd:
             return self.xsrc(i, ops[1]) + 'for(int k=0;k<2;k++)%s.d[k]=%s.d[k]%ss.d[k];' % (D(), D(), pd[mn])
