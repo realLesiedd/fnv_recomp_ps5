@@ -118,6 +118,21 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
     texture-stage states, constant ranges, transforms, viewport, material). Before this, every state was compared
     on every draw.
   - The DXVK HUD is twice as large (scale 4).
+- **v18 on PS5 (28 min):** stutters are almost all the game's own code, not graphics (draws, uploads and Present
+  are a few ms). Autosaves take about 255 ms, with 150 ms of that waiting on file writes. About 400 D3D objects
+  are created in a single frame, every few seconds (about 160 ms each, of which 130 ms is CPU). Area loads take
+  0.4-0.8 s.
+- **v20:**
+  - **Fire, smoke and dust flicker fixed.** Dynamic vertex buffers locked with D3DLOCK_DISCARD now get fresh GPU
+    storage. They used to be written in place with NOOVERWRITE while the previous frame's draws still read them,
+    so particles rebuilt every frame jumped between nothing and big bursts. Measured at a Primm fire barrel: the
+    average frame-to-frame brightness change dropped from 8.2 to 3.2.
+  - **File writes** are gathered per file in 256 KB pieces (saves were thousands of small system writes). A
+    save written this way loads back correctly.
+  - The slow-frame report lists the kinds and sizes of objects in a burst. FNV_SHOT_AFTER (seconds) starts test
+    screenshots late.
+  - Seen once locally: a guest null read in the script runner (RunScript 0x5E0D20) just after loading the Primm
+    save. Four other loads of the same save did not hit it, so it looks like a timing race in the game.
 - **To watch:** stutters in game; frame rate outdoors at the longer draw distances; dust and smoke clouds
   (player video: heavy orange sheets with hard edges, cause not found yet). The old "all threads 100%" figure came from a
   process clock that is not meaningful on PS5; v14 uses getrusage plus per-thread clocks.

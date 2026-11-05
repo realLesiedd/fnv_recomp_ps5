@@ -272,7 +272,10 @@ static IDirect3DVertexBuffer9 *host_vb(Obj *o) {
     Prof prof_(T_UPLOAD);
     void *p;
     bool whole = o->dirty_lo == 0 && o->dirty_hi >= o->size;
-    DWORD f = (o->usage & D3DUSAGE_DYNAMIC) ? (whole ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE) : 0;
+    /* a dynamic buffer the game discarded gets fresh GPU storage: writing the old one with NOOVERWRITE would
+       change vertices the previous frame's draws are still reading (flickering particles) */
+    DWORD f = (o->usage & D3DUSAGE_DYNAMIC) ? ((whole || o->discard) ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE) : 0;
+    o->discard = 0;
     if (SUCCEEDED(b->Lock(o->dirty_lo, o->dirty_hi - o->dirty_lo, &p, f))) {
       memcpy(p, HP(o->data[0][0] + o->dirty_lo), o->dirty_hi - o->dirty_lo);
       b->Unlock();
@@ -296,7 +299,10 @@ static IDirect3DIndexBuffer9 *host_ib(Obj *o) {
     Prof prof_(T_UPLOAD);
     void *p;
     bool whole = o->dirty_lo == 0 && o->dirty_hi >= o->size;
-    DWORD f = (o->usage & D3DUSAGE_DYNAMIC) ? (whole ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE) : 0;
+    /* a dynamic buffer the game discarded gets fresh GPU storage: writing the old one with NOOVERWRITE would
+       change vertices the previous frame's draws are still reading (flickering particles) */
+    DWORD f = (o->usage & D3DUSAGE_DYNAMIC) ? ((whole || o->discard) ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE) : 0;
+    o->discard = 0;
     if (SUCCEEDED(b->Lock(o->dirty_lo, o->dirty_hi - o->dirty_lo, &p, f))) {
       memcpy(p, HP(o->data[0][0] + o->dirty_lo), o->dirty_hi - o->dirty_lo);
       b->Unlock();

@@ -68,11 +68,13 @@ typedef struct HObj {
   /* files */
   int fd; void *dir; char *pattern; char *dirpath;
   void *ents; int nents, pos; /* FindFirstFile: the merged listing (game folder plus overlays) */
+  char *wbuf; u32 wlen;       /* files: writes not yet passed to the system (h_flush) */
   char name[64];
 } HObj;
 u32 h_new(int type);
 HObj *h_get(u32 h);
 void h_close(u32 h);
+void h_flush(HObj *o);        /* pass a file's buffered writes to the system */
 extern pthread_mutex_t g_wait_lock;
 extern pthread_cond_t g_wait_cond;
 void sync_signal_all(void);

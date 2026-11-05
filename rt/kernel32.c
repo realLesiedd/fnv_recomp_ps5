@@ -638,10 +638,13 @@ API(k_UnhandledExceptionFilter) { RETURN_STD(1, 1); }
 API(k_SetUnhandledExceptionFilter) { RETURN_STD(1, 0); }
 
 /* ---- files ----------------------------------------------------------------- */
+/* the file's descriptor, with its buffered writes passed to the system first (reads, seeks and sizes see them) */
 static int win_fd(Ctx *c, u32 h) {
   if (h == 0x14 || h == 0x18) return h == 0x14 ? 1 : 2;
   HObj *o = h_get(h);
-  return o && o->type == H_FILE ? o->fd : -1;
+  if (!o || o->type != H_FILE) return -1;
+  h_flush(o);
+  return o->fd;
 }
 static u32 create_file(Ctx *c, const char *name, u32 access, u32 disp) {
   char hp[2048];
@@ -685,10 +688,25 @@ API(k_ReadFile) {
   if (ARG(3)) M32(ARG(3)) = r < 0 ? 0 : r;
   RETURN_STD(5, r >= 0);
 }
+/* Writes are gathered per file and passed on in 256 KB pieces: the game writes saves in many small pieces, and on
+   PS5 each system write costs enough that an autosave stalled the game for about 0.25 s */
+#define WBUF (256u << 10)
 API(k_WriteFile) {
-  int fd = win_fd(c, ARG(0));
+  u32 h = ARG(0), n = ARG(2);
+  HObj *o = (h == 0x14 || h == 0x18) ? NULL : h_get(h);
+  if (o && o->type == H_FILE && n < WBUF) {
+    if (!o->wbuf) o->wbuf = malloc(WBUF);
+    if (o->wbuf) {
+      if (o->wlen + n > WBUF) h_flush(o);
+      memcpy(o->wbuf + o->wlen, HP(ARG(1)), n);
+      o->wlen += n;
+      if (ARG(3)) M32(ARG(3)) = n;
+      RETURN_STD(5, 1);
+    }
+  }
+  int fd = win_fd(c, h);
   if (fd < 0) { rt_set_error(c, 6); RETURN_STD(5, 0); }
-  ssize_t r = write(fd, HP(ARG(1)), ARG(2));
+  ssize_t r = write(fd, HP(ARG(1)), n);
   if (ARG(3)) M32(ARG(3)) = r < 0 ? 0 : r;
   RETURN_STD(5, r >= 0);
 }
@@ -722,7 +740,7 @@ API(k_GetFileSizeEx) {
   M64(ARG(1)) = st.st_size;
   RETURN_STD(2, 1);
 }
-API(k_FlushFileBuffers) { RETURN_STD(1, 1); }
+API(k_FlushFileBuffers) { win_fd(c, ARG(0)); RETURN_STD(1, 1); }
 API(k_SetEndOfFile) { int fd = win_fd(c, ARG(0)); off_t p = lseek(fd, 0, SEEK_CUR); RETURN_STD(1, ftruncate(fd, p) == 0); }
 API(k_GetFileType) { u32 h = ARG(0); RETURN_STD(1, (h == 0x10 || h == 0x14 || h == 0x18) ? 2 : 1); }
 API(k_DeleteFileA) { char hp[2048]; fs_host_path(STR(ARG(0)), hp, sizeof hp); RETURN_STD(1, unlink(hp) == 0); }

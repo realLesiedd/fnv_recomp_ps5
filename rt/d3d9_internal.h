@@ -22,6 +22,7 @@ typedef struct Obj {
   void *host;            /* GPU backend object (IDirect3D*9), created on first use */
   u32 dirty[6];          /* GPU backend: levels to upload, one bit per level and face */
   u32 dirty_lo, dirty_hi;/* GPU backend: buffer byte range to upload */
+  int discard;           /* GPU backend: the game locked with D3DLOCK_DISCARD since the last upload */
 } Obj;
 
 typedef struct {

@@ -78,12 +78,25 @@ HObj *h_get(u32 h) {
   return g_h[i];
 }
 
+void h_flush(HObj *o) {
+  if (!o || !o->wlen) return;
+  u32 done = 0;
+  while (done < o->wlen) {
+    ssize_t r = write(o->fd, o->wbuf + done, o->wlen - done);
+    if (r <= 0) { rt_log("file write failed (%u bytes lost)", o->wlen - done); break; }
+    done += (u32)r;
+  }
+  o->wlen = 0;
+}
+
 void h_close(u32 h) {
   pthread_mutex_lock(&g_h_lock);
   u32 i = (h - 0x1000) / 4;
   if (h >= 0x1000 && i < MAX_H && g_h[i]) {
     HObj *o = g_h[i];
-    if (o->type == H_FILE && o->fd >= 0) close(o->fd);
+    if (o->type == H_FILE && o->fd >= 0) { h_flush(o); close(o->fd); }
+    free(o->wbuf);
+    o->wbuf = NULL;
     if (o->type == H_FIND && o->dir) closedir(o->dir);
     free(o->ents);
     free(o->pattern);

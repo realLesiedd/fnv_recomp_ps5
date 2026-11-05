@@ -35,6 +35,10 @@ int g_d3d_live; /* objects not yet released, for the perf line */
 int d3d_objects_created(void) { return g_nobj - 1; }
 static pthread_mutex_t g_obj_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* objects created this frame, by kind, plus the last few, for the slow-frame report */
+static int g_frame_kinds[16];
+static u32 g_frame_recent[6];
+static int g_frame_nrecent;
 static u32 new_obj(u32 vt, int kind, Obj **out) {
   u32 g = com_object(vt, 4);
   Obj *o = calloc(1, sizeof *o);
@@ -42,6 +46,8 @@ static u32 new_obj(u32 vt, int kind, Obj **out) {
   pthread_mutex_lock(&g_obj_lock);
   int id = g_nobj++;
   g_d3d_live++;
+  if (kind < 16) g_frame_kinds[kind]++;
+  g_frame_recent[g_frame_nrecent++ % 6] = g;
   if (id >= MAXOBJ) rt_fatal(NULL, "too many D3D objects");
   if (!g_objc[id / CHUNK]) g_objc[id / CHUNK] = calloc(CHUNK, sizeof(Obj *));
   g_objc[id / CHUNK][id % CHUNK] = o;
@@ -181,6 +187,21 @@ static void be_present(void) {
     if (last_ms > 0 && hb_active())
       hb_frame_end(now - last_ms, present_ms, pthread_equal(last_thr, pthread_self()) ? cpu - last_cpu : -1, created - last_created,
                    (created - last_created) - (live - last_live), (g_stat_read - last_read) / 1048576.0);
+    if (created - last_created > 150 && now - last_ms > 100) { /* a burst of new objects in a slow frame: what */
+      static const char *kn[] = {"d3d", "device", "surface", "texture", "cube", "volume", "vertex buffer", "index buffer",
+                                 "vertex shader", "pixel shader", "declaration", "query", "state block", "swap chain"};
+      char b[600]; int o = 0;
+      for (int k = 0; k < 14; k++) if (g_frame_kinds[k]) o += snprintf(b + o, sizeof b - o, " %d %s,", g_frame_kinds[k], kn[k]);
+      o += snprintf(b + o, sizeof b - o, " e.g.");
+      for (int i = 0; i < 6 && i < g_frame_nrecent; i++) {
+        Obj *x = obj(g_frame_recent[i]);
+        if (x) o += snprintf(b + o, sizeof b - o, " [%s %ux%u fmt %u usage %x pool %u size %u]", x->kind < 14 ? kn[x->kind] : "?",
+                             x->w, x->h, x->fmt, x->usage, x->pool, x->size);
+      }
+      rt_log("D3D9: objects created that frame:%s", b);
+    }
+    memset(g_frame_kinds, 0, sizeof g_frame_kinds);
+    g_frame_nrecent = 0;
     last_ms = now; last_cpu = cpu; last_thr = pthread_self(); last_created = created; last_live = live; last_read = g_stat_read;
   }
   g_frames++;
@@ -374,6 +395,7 @@ API(b_Lock) {
   u32 end = (n == 0 || off + n > o->size) ? o->size : off + n;
   if (o->dirty_hi <= o->dirty_lo) { o->dirty_lo = off; o->dirty_hi = end; }
   else { if (off < o->dirty_lo) o->dirty_lo = off; if (end > o->dirty_hi) o->dirty_hi = end; }
+  if (ARG(4) & 0x2000) o->discard = 1; /* D3DLOCK_DISCARD: the GPU may still be reading the old contents */
   M32(ARG(3)) = o->data[0][0] + (off < o->size ? off : 0);
   RETURN_STD(5, S_OK);
 }
@@ -868,7 +890,11 @@ static void be_present_shot(void) {
     if (getenv("FNV_SHOT_EVERY")) g_shot_every = atoi(getenv("FNV_SHOT_EVERY"));
     if (getenv("FNV_RENDER_EVERY")) g_render_every = atoi(getenv("FNV_RENDER_EVERY"));
   }
-  if (g_shot_every && g_render_on && (g_frames + 1) % g_shot_every == 0) {
+  static double shot_after = -1;
+  if (shot_after < 0) shot_after = getenv("FNV_SHOT_AFTER") ? atof(getenv("FNV_SHOT_AFTER")) : 0; /* seconds since start */
+  int in_window = 1;
+  if (shot_after > 0) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); static double t0; double now = t.tv_sec + t.tv_nsec / 1e9; if (!t0) t0 = now; in_window = now - t0 >= shot_after; }
+  if (g_shot_every && g_render_on && in_window && (g_frames + 1) % g_shot_every == 0) {
     char p[256]; mkdir("shots", 0755);
     snprintf(p, sizeof p, "shots/frame_%06llu.png", (unsigned long long)g_frames + 1);
     Obj *bb = obj(D->backbuffer);
