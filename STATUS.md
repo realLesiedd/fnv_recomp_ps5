@@ -57,28 +57,23 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
 
 ## PS5 (jailbroken, firmware 13.42): progress
 
-- **Tested on hardware** (app PPSA97701, built by `ps5/build.sh`; see `ps5/README.md`):
-  - The app launches and does first-run setup.
-  - DXVK on RADV drives the TV at 3840x2160 @ 59 Hz.
-  - The main menu runs at 59.9 fps (DXVK HUD on) and the DualSense navigates it.
-- **New Game.** v4 crashed to the home screen (CE-108255-1) because the intro movie called the unimplemented
-  `BinkOpen`. Movies are now skipped (`rt/misc.c`), and the MMX code that runs right after them is recompiled.
-  - On Linux, New Game now reaches the opening scene in Doc Mitchell's house (3D world, wake-up blur, DLC item
-    notices).
-  - On PS5 (v5): waiting on the test.
-- **Continue/Load showing with no saves is vanilla.** The menu dims them when `Saves\*.fos` finds nothing, then
-  `0x7CFD20` (called when the menu finishes fading in) sets both back to `_enabled = 1`, so the original exe shows them
-  too.
-- **Main menu: Continue is left off until a save exists.** This is a deliberate change from the original exe
-  (`rt/hooks.c`), at the player's request.
-- **Audio** (tested on Linux, recorded with SDL's disk driver):
-  - DirectSound 8 mixer (`rt/dsound.c`): static, streaming, duplicate and 3D buffers, the listener and position
-    notifications. Output goes through SDL: PulseAudio/ALSA on Linux, `sceAudioOut` on PS5.
-  - `.wav` effects and UI sounds: WINMM mmio (`rt/mmio.c`) driving the game's own BSA reader.
-  - `.ogg` voices: libvorbisfile calls over stb_vorbis (`rt/vorbis.c`).
-  - `.mp3` music: DirectShow (`rt/dshow.c`) reads the track through the game's source filter and decodes it with
-    dr_mp3.
-- Not yet: Bink video playback (intro movies are skipped).
+- **Playable on hardware (v13):** main menu, New Game through character creation, Goodsprings and the Mojave;
+  saving, loading (from the menu and in game) and Continue; Exit Game closes the app back to the home screen.
+- **About 60 fps** (the TV's 59 Hz cap) indoors and out at a 1280x720 render upscaled to 4K. Outdoors the main
+  thread is at 91-96% CPU, so there is little headroom yet.
+- **Sound:** DirectSound mixer, .wav effects (mmio), .ogg voices (stb_vorbis), .mp3 music (dr_mp3).
+- **Fixed along the way:**
+  - Bink intro movies are skipped (no video decoder yet).
+  - MMX, SSE shifts and x87 save/restore are recompiled.
+  - The MP3 decoder is no longer copied, which crashed on music changes.
+  - TLS slots are cleared in every thread on TlsAlloc/TlsFree, which crashed save loads.
+  - Trivial KERNEL32 calls are inlined, which removes the per-call clock read; that also cured a PS5 load stall.
+  - The loading-screen thread no longer crashes on quit.
+  - Exit Game closes like FileDen (sceSystemServiceLoadExec("exit")).
+  - Continue is not listed until a save exists.
+- **Diagnostics in fnv.log:** the release on the first line; a "perf:" line every 5 s (fps, frame times, CPU,
+  memory, GPU memory); a stall report naming what each thread is doing if the game stops polling input.
+- **To watch:** only about 70 MB of host (flexible) memory is free, and one thread looks busy all the time.
 
 ## Roadmap (the player's goals, in order)
 
