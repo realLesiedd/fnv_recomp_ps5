@@ -1,7 +1,7 @@
 build/
 gen/
 game/
-run/
+run*/
 user/
 *.log
 __pycache__/
