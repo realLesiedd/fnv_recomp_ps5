@@ -35,9 +35,16 @@ API(k_TlsAlloc) {
   u32 r = 0xffffffff;
   for (int i = 0; i < 64; i++) if (!g_tls_used[i]) { g_tls_used[i] = 1; r = i; break; }
   pthread_mutex_unlock(&g_tls_lock);
+  if (r != 0xffffffff) rt_tls_clear_all(r); /* a fresh slot reads 0 in every thread */
   RETURN_STD(0, r);
 }
-API(k_TlsFree) { u32 i = ARG(0); if (i < 64) g_tls_used[i] = 0; RETURN_STD(1, 1); }
+/* Windows clears a freed slot in every thread; a later TlsAlloc of the same index must not see old values
+ * (the game's task queues cache a per-thread queue in TLS and rebuild them when a save is loaded) */
+API(k_TlsFree) {
+  u32 i = ARG(0);
+  if (i < 64) { rt_tls_clear_all(i); pthread_mutex_lock(&g_tls_lock); g_tls_used[i] = 0; pthread_mutex_unlock(&g_tls_lock); }
+  RETURN_STD(1, i < 64);
+}
 API(k_TlsGetValue) { u32 i = ARG(0); rt_set_error(c, 0); RETURN_STD(1, i < 64 ? TLS_SLOT(i) : 0); }
 API(k_TlsSetValue) { u32 i = ARG(0); if (i < 64) TLS_SLOT(i) = ARG(1); RETURN_STD(2, i < 64); }
 

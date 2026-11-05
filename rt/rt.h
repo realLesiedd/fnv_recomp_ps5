@@ -50,6 +50,7 @@ typedef struct HostThread HostThread;
 Ctx *rt_new_ctx(u32 stack_size);
 Ctx *rt_current(void);
 u32 rt_teb_alloc(Ctx *c, u32 stack_lo, u32 stack_hi, u32 tid);
+void rt_tls_clear_all(u32 slot); /* TlsAlloc/TlsFree: Windows zeroes the slot in every thread */
 extern u32 g_peb;
 u32 rt_thread_create(Ctx *parent, u32 start, u32 param, u32 stack, u32 flags, u32 *tid);
 

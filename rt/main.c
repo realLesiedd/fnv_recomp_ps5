@@ -217,8 +217,22 @@ Ctx *rt_new_ctx(u32 stack_size) {
 
 void rt_bind_thread(Ctx *c) { t_ctx = c; }
 
+/* every TEB ever created (they are never freed), so TLS slots can be cleared in all threads */
+#define MAX_TEBS 4096
+static u32 g_tebs[MAX_TEBS];
+static int g_nteb;
+static pthread_mutex_t g_teb_lock = PTHREAD_MUTEX_INITIALIZER;
+void rt_tls_clear_all(u32 slot) {
+  pthread_mutex_lock(&g_teb_lock);
+  for (int i = 0; i < g_nteb; i++) M32(g_tebs[i] + 0xE10 + 4 * slot) = 0;
+  pthread_mutex_unlock(&g_teb_lock);
+}
+
 u32 rt_teb_alloc(Ctx *c, u32 stack_lo, u32 stack_hi, u32 tid) {
   u32 teb = vm_alloc(0, 0x2000, 0x3000, 4);
+  pthread_mutex_lock(&g_teb_lock);
+  if (g_nteb < MAX_TEBS) g_tebs[g_nteb++] = teb;
+  pthread_mutex_unlock(&g_teb_lock);
   M32(teb + 0x00) = 0xffffffff; /* SEH chain end */
   M32(teb + 0x04) = stack_hi;
   M32(teb + 0x08) = stack_lo;
