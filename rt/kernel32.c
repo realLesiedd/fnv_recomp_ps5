@@ -12,7 +12,6 @@
 #include <fnmatch.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include <sys/sysinfo.h>
 #include <sched.h>
 #include <setjmp.h>
 

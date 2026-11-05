@@ -288,7 +288,7 @@ class Emitter:
     # ---- main
     def function(self, f, info):
         insns, labels, tables = info['insns'], info['labels'], info['tables']
-        out = ['void %s(Ctx *restrict c){' % fn(f),
+        out = ['void %s(Ctx *restrict c){u8 *const gm = g_guest_mem;' % fn(f),
                'u32 eax=c->r[0],ecx=c->r[1],edx=c->r[2],ebx=c->r[3],esp=c->r[4],ebp=c->r[5],esi=c->r[6],edi=c->r[7];',
                'int lf_op=LF_EXPL;u32 lf_a=0,lf_b=0,lf_r=c->eflags,lf_ci=0;(void)lf_a;(void)lf_b;(void)lf_ci;']
         addrs = sorted(insns)
@@ -1147,7 +1147,9 @@ class Emitter:
 
 # ----------------------------------------------------------------------------- driver
 
-HEADER = '#include "../rt/x86.h"\n#pragma clang diagnostic ignored "-Wunused-label"\n'
+HEADER = ('#include "../rt/x86.h"\n#pragma clang diagnostic ignored "-Wunused-label"\n'
+          '/* generated functions keep the guest base in a local so stores cannot force reloads */\n'
+          '#undef GUEST_MEM\n#define GUEST_MEM gm\n')
 
 
 _W = {}

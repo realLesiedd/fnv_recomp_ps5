@@ -88,8 +88,20 @@ API(n_htons) { u32 v = ARG(0) & 0xffff; RETURN_STD(1, ((v & 0xff) << 8) | (v >> 
 API(n_ntohs) { u32 v = ARG(0) & 0xffff; RETURN_STD(1, ((v & 0xff) << 8) | (v >> 8)); }
 
 /* XInput: no controller */
-API(x_XInputGetState) { RETURN_STD(2, 1167); }
-API(x_XInputSetState) { RETURN_STD(2, 1167); }
+#include "platform.h"
+API(x_XInputGetState) {
+  PlatPad p; u32 packet; u32 st = ARG(1);
+  if (!plat_pad(ARG(0), &p, &packet)) RETURN_STD(2, 1167); /* ERROR_DEVICE_NOT_CONNECTED */
+  M32(st) = packet; M16(st + 4) = p.buttons; M8(st + 6) = p.lt; M8(st + 7) = p.rt;
+  M16(st + 8) = p.lx; M16(st + 10) = p.ly; M16(st + 12) = p.rx; M16(st + 14) = p.ry;
+  RETURN_STD(2, 0);
+}
+API(x_XInputSetState) {
+  PlatPad p; u32 packet;
+  if (!plat_pad(ARG(0), &p, &packet)) RETURN_STD(2, 1167);
+  plat_rumble(ARG(0), M16(ARG(1)), M16(ARG(1) + 2));
+  RETURN_STD(2, 0);
+}
 
 /* GOG Galaxy's Steam-API compatible wrapper (cdecl): report that the service is not running */
 API(gx_SteamAPI_Init) { rt_log("SteamAPI_Init (GOG Galaxy wrapper) -> false"); RETURN_CDECL(0); }

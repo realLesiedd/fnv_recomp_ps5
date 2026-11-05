@@ -10,10 +10,15 @@
 #include <string.h>
 #include <math.h>
 
-#define GUEST_BASE 0x100000000ULL
 
 typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32; typedef uint64_t u64;
 typedef int8_t s8; typedef int16_t s16; typedef int32_t s32; typedef int64_t s64;
+
+/* host address of guest address 0; chosen at startup (rt/mem.c) */
+extern u8 *g_guest_mem;
+#ifndef GUEST_MEM
+#define GUEST_MEM g_guest_mem
+#endif
 
 typedef u16 __attribute__((aligned(1), may_alias)) u16u;
 typedef u32 __attribute__((aligned(1), may_alias)) u32u;
@@ -21,7 +26,7 @@ typedef u64 __attribute__((aligned(1), may_alias)) u64u;
 typedef float __attribute__((aligned(1), may_alias)) f32u;
 typedef double __attribute__((aligned(1), may_alias)) f64u;
 
-#define HP(a) ((u8 *)(GUEST_BASE + (u64)(u32)(a)))
+#define HP(a) ((u8 *)(GUEST_MEM + (u64)(u32)(a)))
 #define M8(a) (*(u8 *)HP(a))
 #define M16(a) (*(u16u *)HP(a))
 #define M32(a) (*(u32u *)HP(a))

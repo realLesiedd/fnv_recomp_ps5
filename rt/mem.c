@@ -14,13 +14,77 @@ static u32 g_owner[NGRAN];  /* 0 = free, else base address of the reservation (+
 static u32 g_rsize[NGRAN];  /* reservation size, stored at the base granule */
 static u32 g_vm_hint = 0x02000000u;
 
+u8 *g_guest_mem;
+#ifndef MAP_NORESERVE
+#define MAP_NORESERVE 0
+#endif
+
+/* Guest pages are reserved inaccessible and made readable/writable when the
+ * guest allocates them, so untouched address space costs nothing and stray
+ * pointers fault (reported with the guest address). */
+#ifdef __PROSPERO__
+/* PS5: an app's ordinary anonymous memory comes from a small "flexible" pool, too small for
+ * the game (the gta4-ps5 port documents the same limit). Guest memory is backed by direct
+ * memory instead, mapped at fixed addresses inside the reserved 4 GiB window. */
+#include <sys/types.h>
+int sceKernelAllocateMainDirectMemory(size_t len, size_t align, int type, off_t *phys);
+int sceKernelMapDirectMemory(void **addr, size_t len, int prot, int flags, off_t phys, size_t align);
+int sceKernelReleaseDirectMemory(off_t phys, size_t len);
+int sceKernelReserveVirtualRange(void **addr, size_t len, int flags, size_t align);
+#define PS5_MAP_FIXED 0x10
+#define PS5_PROT_CPU_RW 0x03
+static off_t g_phys[0x80000000u / 0x10000u];     /* direct memory behind each reservation (by base granule) */
+static void commit(u32 a, u32 n) {
+  off_t phys = 0;
+  if (sceKernelAllocateMainDirectMemory(n, 0x10000, 0 /* WB */, &phys)) {
+    fprintf(stderr, "guest memory: out of direct memory (%u KiB at %08x)\n", n >> 10, a); exit(2);
+  }
+  void *addr = HP(a);
+  if (sceKernelMapDirectMemory(&addr, n, PS5_PROT_CPU_RW, PS5_MAP_FIXED, phys, 0x10000) || addr != HP(a)) {
+    fprintf(stderr, "guest memory: sceKernelMapDirectMemory failed at %08x\n", a); exit(2);
+  }
+  memset(addr, 0, n); /* Windows hands out zeroed pages */
+  g_phys[a / 0x10000u] = phys;
+}
+static void uncommit(u32 base, u32 n) {
+  munmap(HP(base), n);
+  void *addr = HP(base);
+  if (sceKernelReserveVirtualRange(&addr, n, PS5_MAP_FIXED, 0x10000))
+    mmap(HP(base), n, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+  if (g_phys[base / 0x10000u]) sceKernelReleaseDirectMemory(g_phys[base / 0x10000u], n);
+  g_phys[base / 0x10000u] = 0;
+}
+static void *reserve_window(void) {
+  void *p = NULL;
+  if (sceKernelReserveVirtualRange(&p, 0x100000000ull, 0, 0x10000) == 0 && p) return p;
+  p = mmap(NULL, 0x100000000ull, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  return p == MAP_FAILED ? NULL : p;
+}
+#else
+static void commit(u32 a, u32 n) {
+  if (mprotect(HP(a), n, PROT_READ | PROT_WRITE)) { perror("mprotect (commit guest memory)"); exit(2); }
+}
+static void *reserve_window(void) {
+  void *p = mmap(NULL, 0x100000000ull, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+  return p == MAP_FAILED ? NULL : p;
+}
+#endif
+
+/* replace pages with new zero-filled ones (MADV_DONTNEED does not zero on FreeBSD/PS5) */
+static void fresh(u32 a, u32 n, int prot) {
+#ifdef __PROSPERO__
+  /* never re-map inside the window on PS5: zero (decommit) or hand the memory back (release) */
+  if (prot == PROT_NONE) uncommit(a, n); else memset(HP(a), 0, n);
+#else
+  if (mmap(HP(a), n, prot, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED) perror("mmap (release guest memory)");
+#endif
+}
+
 void mem_init(void) {
-  void *p = mmap((void *)GUEST_BASE, 0x100000000ull, PROT_READ | PROT_WRITE,
-                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
-  if (p != (void *)GUEST_BASE) { perror("mmap guest space"); exit(2); }
-  /* catch null-pointer dereferences and stray accesses to the thunk range */
-  mprotect((void *)GUEST_BASE, VM_LO, PROT_NONE);
-  mprotect((void *)(GUEST_BASE + THUNK_BASE), 0x10000000u, PROT_NONE);
+  void *p = reserve_window();
+  if (!p) { perror("reserving the 4 GiB guest window"); exit(2); }
+  g_guest_mem = p;
+  commit(IMAGE_BASE, (g_image_size + GRAN - 1) & ~(GRAN - 1));
   /* the image range is reserved */
   for (u32 a = IMAGE_BASE; a < IMAGE_BASE + g_image_size; a += GRAN) g_owner[a / GRAN] = IMAGE_BASE + 1;
   g_rsize[IMAGE_BASE / GRAN] = (g_image_size + GRAN - 1) & ~(GRAN - 1);
@@ -35,6 +99,7 @@ static int range_free(u32 a, u32 n) {
 static void reserve(u32 a, u32 n) {
   for (u32 g = a / GRAN; g < (a + n) / GRAN; g++) g_owner[g] = a + 1;
   g_rsize[a / GRAN] = n;
+  commit(a, n);
 }
 
 u32 vm_alloc(u32 addr, u32 size, u32 type, u32 prot) {
@@ -77,14 +142,14 @@ int vm_free(u32 addr, u32 size, u32 type) {
   if (g < NGRAN && g_owner[g]) {
     if (type & 0x8000) { /* MEM_RELEASE */
       u32 base = g_owner[g] - 1, n = g_rsize[base / GRAN];
-      madvise(HP(base), n, MADV_DONTNEED);
+      fresh(base, n, PROT_NONE);
       for (u32 k = base / GRAN; k < (base + n) / GRAN; k++) g_owner[k] = 0;
       if (base < g_vm_hint) g_vm_hint = base < 0x02000000u ? 0x02000000u : base;
       ok = 1;
     } else { /* MEM_DECOMMIT */
       u32 a = addr & ~0xfffu;
       u32 n = size ? ((addr + size - a + 0xfff) & ~0xfffu) : g_rsize[(g_owner[g] - 1) / GRAN];
-      madvise(HP(a), n, MADV_DONTNEED);
+      fresh(a, n, PROT_READ | PROT_WRITE);
       ok = 1;
     }
   }

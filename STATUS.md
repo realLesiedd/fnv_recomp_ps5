@@ -54,3 +54,21 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
    Bink video (or skipping the intro videos) and libvorbisfile (host libvorbis).
 5. **Console target.** Only the runtime (`rt/`) is platform-specific. The generated code is portable C, apart from
    the fixed 4 GiB guest window, which needs a large reserved virtual range.
+
+## PS5 (jailbroken, firmware 13.42): progress
+
+- Done:
+  - **Movable guest window.** The 4 GiB guest window is no longer at a fixed host address. On PS5, guest pages come
+    from direct memory (`rt/mem.c`), following the gta4-ps5 port's finding that ordinary memory comes from a small pool.
+  - **SDL2 platform layer** (`rt/platform_sdl.c`). The backbuffer goes to the screen, and the DualSense feeds XInput,
+    New Vegas's own controller support, rumble included. Keyboard and mouse feed DirectInput.
+  - **First-run setup inside the runtime** (`rt/firstrun.c`): no launcher or scripts needed on the console.
+  - **The PS5 toolchain compiles the runtime and the generated game code** (ps5-payload-sdk `prospero-clang`).
+  - **A GPU probe payload** (`ps5/glprobe/`): tests Sony's OpenGL ES (GLSlim) from homebrew.
+- Plan (renderer): Vulkan on the console's GPU through PS5 Mesa's RADV (mihawk-99). The renderer is DXVK (D3D9 on
+  Vulkan) behind the existing D3D9 front end, packaged as a home-screen app with Nazky's ps5-plume-triangle tooling,
+  as the gta4-ps5 port does.
+- Blocked: building the third-party pieces (plume-triangle/RADV, DXVK, PS5 SDL2) needs a Bash permission rule in
+  this session.
+- Untested on hardware: everything PS5-side. The direct-memory calls use the signatures PS5 homebrew projects
+  use; check `/data/fnv_recomp/fnv.log` on the console.

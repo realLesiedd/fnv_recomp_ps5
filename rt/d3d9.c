@@ -118,8 +118,10 @@ static u32 mip_count(u32 w, u32 h) { u32 n = 1; while (w > 1 || h > 1) { w = w >
 static u64 g_frames, g_draws, g_prims;
 static int g_shot_every, g_render_every;
 static void be_present_shot(void);
+static void be_platform_present(void);
 static void be_present(void) {
   be_present_shot();
+  be_platform_present();
   g_frames++;
   if (g_frames == 1 || (g_frames % 300) == 0)
     rt_log("D3D9: frame %llu presented (%llu draw calls, %llu primitives so far; null renderer)",
@@ -787,6 +789,12 @@ static const ComMethod d3d_methods[] = {
   {"IDirect3D9::CreateDevice", 7, i_CreateDevice},
 };
 
+#include "platform.h"
+static void be_platform_present(void) {
+  if (!g_render_on || !D) return;
+  Obj *bb = obj(D->backbuffer);
+  if (bb && (bb->fmt == 21 || bb->fmt == 22)) plat_present((const uint32_t *)HP(bb->data[0][0]), bb->w, bb->h, bb->pitch[0]);
+}
 static void be_present_shot(void) {
   static int init;
   if (!init) {

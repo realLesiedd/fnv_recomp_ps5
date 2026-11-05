@@ -8,8 +8,19 @@ API(m_AddRef) { u32 o = COM_THIS; RETURN_STD(1, ++M32(o + 4)); }
 API(m_Release) { u32 o = COM_THIS; u32 r = M32(o + 4) ? --M32(o + 4) : 0; RETURN_STD(1, r); }
 API(m_QueryInterface) { u32 o = COM_THIS; M32(ARG(2)) = o; M32(o + 4)++; RETURN_STD(3, 0); }
 
-/* IDirectInputDevice8A */
-API(dev_GetDeviceState) { memset(HP(ARG(2)), 0, ARG(1)); RETURN_STD(3, 0); }
+#include "platform.h"
+/* IDirectInputDevice8A; object extra data: [8] = 1 keyboard, 2 mouse */
+API(dev_GetDeviceState) {
+  u32 o = COM_THIS, n = ARG(1), p = ARG(2);
+  memset(HP(p), 0, n);
+  if (M32(o + 8) == 1) { u8 k[256]; plat_keys(k); memcpy(HP(p), k, n < 256 ? n : 256); }
+  else if (M32(o + 8) == 2 && n >= 16) {
+    int32_t dx, dy, dz; u8 b[8]; plat_mouse(&dx, &dy, &dz, b);
+    M32(p) = dx; M32(p + 4) = dy; M32(p + 8) = dz;
+    memcpy(HP(p + 12), b, n >= 20 ? 8 : 4);
+  }
+  RETURN_STD(3, 0);
+}
 API(dev_GetDeviceData) { if (ARG(3)) M32(ARG(3)) = 0; RETURN_STD(5, 0); }
 API(dev_GetCapabilities) {
   u32 p = ARG(1); u32 n = M32(p); memset(HP(p + 4), 0, n - 4);
@@ -38,7 +49,10 @@ static u32 g_dev_vt;
 /* IDirectInput8A */
 API(di_CreateDevice) {
   if (!g_dev_vt) g_dev_vt = com_vtable(dev_methods, sizeof dev_methods / sizeof *dev_methods);
-  M32(ARG(2)) = com_object(g_dev_vt, 0);
+  u32 o = com_object(g_dev_vt, 4);
+  u32 g = M32(ARG(1));
+  M32(o + 8) = g == 0x6F1D2B61 ? 1 : g == 0x6F1D2B60 ? 2 : 0; /* GUID_SysKeyboard / GUID_SysMouse */
+  M32(ARG(2)) = o;
   RETURN_STD(4, 0);
 }
 API(di_EnumDevices) { RETURN_STD(5, 0); }

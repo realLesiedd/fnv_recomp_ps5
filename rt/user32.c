@@ -78,7 +78,15 @@ API(u_GetSystemMetrics) {
   u32 v = i == 0 ? 1280 : i == 1 ? 720 : i == 43 ? 3 : i == 80 ? 1 : 0;
   RETURN_STD(1, v);
 }
-API(u_PeekMessageA) { usleep(0); RETURN_STD(5, 0); }
+#include "platform.h"
+API(u_PeekMessageA) {
+  plat_pump();
+  if (plat_quit_requested()) {
+    static int sent;
+    if (!sent) { u32 m = ARG(0); memset(HP(m), 0, 28); M32(m + 4) = 0x12; if (ARG(4) & 1) sent = 1; RETURN_STD(5, 1); } /* WM_QUIT */
+  }
+  RETURN_STD(5, 0);
+}
 API(u_TranslateMessage) { RETURN_STD(1, 0); }
 API(u_DispatchMessageA) { RETURN_STD(1, 0); }
 API(u_SendMessageA) { Wnd *w = wnd(ARG(0)); u32 a[4] = {ARG(0), ARG(1), ARG(2), ARG(3)}; u32 r = w && w->wndproc ? rt_call_guest(c, w->wndproc, 4, a) : 0; RETURN_STD(4, r); }

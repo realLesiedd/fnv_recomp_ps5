@@ -7,7 +7,10 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
+#ifdef __linux__
 #include <execinfo.h>
+#endif
+#include <dlfcn.h>
 #include <errno.h>
 #include <sys/stat.h>
 
@@ -30,9 +33,24 @@ void rt_log(const char *fmt, ...) {
 }
 
 static void dump_backtrace(void) {
+#ifdef __linux__
   void *bt[64];
   int n = backtrace(bt, 64);
   backtrace_symbols_fd(bt, n, 2);
+#else
+  /* frame-pointer walk (the PS5 build keeps frame pointers); dladdr names exported f_XXXXXXXX symbols */
+  void **fp = __builtin_frame_address(0);
+  for (int i = 0; i < 48 && fp && ((u64)fp & 7) == 0; i++) {
+    void *ret = fp[1];
+    if (!ret) break;
+    Dl_info di;
+    if (dladdr(ret, &di) && di.dli_sname) fprintf(stderr, "  %s+0x%lx\n", di.dli_sname, (long)((char *)ret - (char *)di.dli_saddr));
+    else fprintf(stderr, "  %p\n", ret);
+    void **next = fp[0];
+    if (next <= fp) break;
+    fp = next;
+  }
+#endif
 }
 
 void rt_fatal(Ctx *c, const char *fmt, ...) {
@@ -234,8 +252,9 @@ static void bind_imports(void) {
 static void on_fault(int sig, siginfo_t *si, void *uc) {
   u64 a = (u64)si->si_addr;
   Ctx *c = t_ctx;
-  if (a >= GUEST_BASE && a < GUEST_BASE + 0x100000000ull)
-    rt_fatal(c, "guest memory fault (signal %d) at guest address %08x", sig, (u32)(a - GUEST_BASE));
+  u64 gb = (u64)g_guest_mem;
+  if (a >= gb && a < gb + 0x100000000ull)
+    rt_fatal(c, "guest memory fault (signal %d) at guest address %08x", sig, (u32)(a - gb));
   rt_fatal(c, "host fault (signal %d) at %p", sig, (void *)a);
 }
 
@@ -245,6 +264,16 @@ int main(int argc, char **argv) {
   const char *exe = getenv("FNV_EXE");
   const char *game = getenv("FNV_GAME_DIR");
   if (getenv("FNV_TRACE")) g_trace = atoi(getenv("FNV_TRACE"));
+#ifdef __PROSPERO__
+  /* PS5: everything lives under /data/fnv_recomp (copy the game folder to /data/fnv_recomp/game);
+     the log goes to a file because payloads have no console */
+  mkdir("/data/fnv_recomp", 0755);
+  if (!game) game = "/data/fnv_recomp/game";
+  if (!getenv("FNV_USER_DIR")) setenv("FNV_USER_DIR", "/data/fnv_recomp/user", 1);
+  if (!freopen("/data/fnv_recomp/fnv.log", "w", stderr)) perror("log file");
+  setvbuf(stderr, NULL, _IOLBF, 0);
+  if (!getenv("FNV_TRACE")) g_trace = 1;
+#endif
   if (!game) game = "game";
   snprintf(g_game_dir, sizeof g_game_dir, "%s", realpath(game, NULL) ? realpath(game, NULL) : game);
   static char exe_buf[1100];
@@ -262,9 +291,14 @@ int main(int argc, char **argv) {
   sigaction(SIGFPE, &sa, NULL);
   sigaction(SIGILL, &sa, NULL);
 
+  { extern void rt_first_run(void); rt_first_run(); }
   mem_init();
   map_image(exe);
   api_init_all();
+  {
+    extern int plat_init(void);
+    plat_init();
+  }
   g_host_return = rt_thunk(host_return_marker, "<host return>");
 
   /* PEB */
