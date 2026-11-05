@@ -205,10 +205,28 @@ def fn(a):
     return 'f_%08X' % a
 
 
+# Trivial KERNEL32 functions emitted inline at `call dword ptr [IAT slot]` instead of going through the runtime:
+# the game calls them hundreds of thousands of times a second. Each body matches the runtime's own version
+# (rt/kernel32.c) and pops its stdcall arguments; `p` etc. are the arguments at [esp] before the call.
+INLINE_IMPORTS = {
+    'InterlockedIncrement': '{u32 p=M32(esp);eax=__atomic_add_fetch((u32*)HP(p),1,__ATOMIC_SEQ_CST);esp+=4;}',
+    'InterlockedDecrement': '{u32 p=M32(esp);eax=__atomic_sub_fetch((u32*)HP(p),1,__ATOMIC_SEQ_CST);esp+=4;}',
+    'InterlockedExchange': '{u32 p=M32(esp),v=M32(esp+4);eax=__atomic_exchange_n((u32*)HP(p),v,__ATOMIC_SEQ_CST);esp+=8;}',
+    'InterlockedExchangeAdd': '{u32 p=M32(esp),v=M32(esp+4);eax=__atomic_fetch_add((u32*)HP(p),v,__ATOMIC_SEQ_CST);esp+=8;}',
+    'InterlockedCompareExchange': '{u32 p=M32(esp),x=M32(esp+4),e=M32(esp+8);'
+                                  '__atomic_compare_exchange_n((u32*)HP(p),&e,x,0,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST);'
+                                  'eax=e;esp+=12;}',
+    'TlsGetValue': '{u32 i=M32(esp);eax=i<64?M32(c->fs_base+0xE10+4*i):0;c->last_error=0;M32(c->fs_base+0x34)=0;esp+=4;}',
+    'GetCurrentThreadId': '{eax=M32(c->fs_base+0x24);}',
+}
+
+
 class Emitter:
     def __init__(self, img, starts):
         self.img = img
         self.starts = starts
+        self.inline_iat = {a: INLINE_IMPORTS[n] for a, dll, n in img.imports
+                           if dll.lower() == 'kernel32.dll' and n in INLINE_IMPORTS}
         self.md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
         self.md.detail = True
 
@@ -374,6 +392,9 @@ class Emitter:
             o = ops[0]
             if self.is_imm(o):
                 return self.call_direct(o.imm & 0xffffffff, nxt), True
+            if self.is_mem(o) and not o.mem.base and not o.mem.index and not o.mem.segment:
+                body = self.inline_iat.get(o.mem.disp & 0xffffffff)
+                if body: return body, True
             tgt = self.rd(i, o) if not self.is_mem(o) else 'M32(%s)' % self.ea(i, o)
             return 'u32 t=%s;esp-=4;M32(esp)=0x%xu;%srt_call_ind(c,t);%s' % (tgt, nxt, SYNC_OUT, SYNC_IN), True
         if mn == 'ret':

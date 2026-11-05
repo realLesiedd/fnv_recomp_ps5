@@ -23,7 +23,7 @@
 #include <ucontext.h>
 #endif
 
-#define FNV_RELEASE "v10" /* printed at the top of the log so a log shows which build produced it */
+#define FNV_RELEASE "v11" /* printed at the top of the log so a log shows which build produced it */
 
 int g_trace;
 u32 g_peb;
@@ -37,6 +37,8 @@ static const char *volatile g_last_api[MAXTHR];
 static volatile u32 g_last_ret[MAXTHR];
 static volatile u64 g_api_calls[MAXTHR];
 static pthread_t g_pth[MAXTHR];
+/* refreshed once a second by the heartbeat: system calls note when they started without reading the clock */
+static volatile double g_coarse_now;
 static volatile int g_pth_set[MAXTHR];
 static double mono_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 u64 g_stat_valloc, g_stat_opens, g_stat_read;
@@ -113,6 +115,7 @@ void rt_fatal(Ctx *c, const char *fmt, ...) {
 static HostFn g_thunk_fn[THUNK_MAX];
 static const char *g_thunk_name[THUNK_MAX];
 static int g_thunk_count;
+static u64 g_thunk_calls[THUNK_MAX]; /* per host function, for FNV_API_STATS */
 static pthread_mutex_t g_thunk_lock = PTHREAD_MUTEX_INITIALIZER;
 
 u32 rt_thunk(HostFn f, const char *name) {
@@ -157,9 +160,10 @@ void rt_call_ind(Ctx *restrict c, u32 t) {
       g_last_api[ti] = g_thunk_name[i];
       g_last_ret[ti] = M32(c->r[4]);
       g_api_calls[ti]++;
+      g_thunk_calls[i]++;
       const char *outer = g_in_api[ti];
       double outer_since = g_in_api_since[ti];
-      if (!outer) { g_in_api_since[ti] = mono_now(); g_in_api[ti] = g_thunk_name[i]; }
+      if (!outer) { g_in_api_since[ti] = g_coarse_now; g_in_api[ti] = g_thunk_name[i]; }
       if (!g_thunk_fn[i]) rt_fatal(c, "call to %s: no host implementation", g_thunk_name[i]);
       g_thunk_fn[i](c);
       g_in_api[ti] = outer; g_in_api_since[ti] = outer_since; /* host calls can nest (window procs) */
@@ -448,6 +452,26 @@ static void perf_line(void) {
   rt_log("perf: %s", b);
 }
 
+/* FNV_API_STATS: every 30 s, the 20 most called system functions and their calls per second */
+static void api_stats(double interval) {
+  static u64 prev[THUNK_MAX], d[THUNK_MAX]; /* static: too big for the heartbeat thread's stack */
+  int n = g_thunk_count, top[20], nt = 0;
+  u64 total = 0;
+  for (int i = 0; i < n; i++) { d[i] = g_thunk_calls[i] - prev[i]; prev[i] = g_thunk_calls[i]; total += d[i]; }
+  for (int k = 0; k < 20; k++) {
+    int best = -1;
+    for (int i = 0; i < n; i++) {
+      int used = 0;
+      for (int j = 0; j < nt; j++) used |= top[j] == i;
+      if (!used && d[i] && (best < 0 || d[i] > d[best])) best = i;
+    }
+    if (best < 0) break;
+    top[nt++] = best;
+  }
+  rt_log("api stats: %.0f calls/s in total; busiest:", total / interval);
+  for (int k = 0; k < nt; k++) rt_log("  %9.0f/s  %s", d[top[k]] / interval, g_thunk_name[top[k]]);
+}
+
 /* heartbeat: every 5 s, one log line with progress counters and any thread that has been
    inside a single system call for more than 2 s (where a stall is) */
 static void *heartbeat(void *arg) {
@@ -456,6 +480,7 @@ static void *heartbeat(void *arg) {
   for (int n = 0;; n++) {
     struct timespec d = {1, 0};
     nanosleep(&d, NULL);
+    g_coarse_now = mono_now();
     fflush(stderr);
     if (n % 5 != 4) continue;
     u64 fr = g_d3d_frames, rd = g_stat_read;
@@ -480,6 +505,9 @@ static void *heartbeat(void *arg) {
            rd / 1048576.0, (rd - last_read) / 1048576.0, (unsigned long long)g_stat_valloc, (unsigned long long)g_stat_pad,
            dsound_voices(), stuck[0] ? "; waiting in" : "", stuck);
     perf_line();
+    static int stats = -1;
+    if (stats < 0) stats = getenv("FNV_API_STATS") != NULL;
+    if (stats && n % 30 == 29) api_stats(30.0);
     last_frames = fr; last_read = rd;
     /* 15 s without a controller poll while frames were being drawn: report (at most every 30 s, 6 times) */
     static u64 last_pad;
@@ -494,6 +522,7 @@ static void *heartbeat(void *arg) {
   return NULL;
 }
 void rt_heartbeat_start(void) {
+  g_coarse_now = mono_now();
   pthread_t th;
   pthread_attr_t at;
   pthread_attr_init(&at);
