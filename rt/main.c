@@ -80,7 +80,9 @@ void rt_fatal(Ctx *c, const char *fmt, ...) {
   pthread_mutex_unlock(&g_log_lock);
   va_end(ap);
 #ifdef __PROSPERO__
-  __builtin_trap(); /* the console's own crash report follows */
+  /* hand the trap to the console's own crash report, not back to on_fault */
+  signal(SIGILL, SIG_DFL); signal(SIGSEGV, SIG_DFL); signal(SIGBUS, SIG_DFL); signal(SIGFPE, SIG_DFL);
+  __builtin_trap();
 #endif
   _exit(3);
 }
@@ -304,9 +306,10 @@ static void *heartbeat(void *arg) {
         strcat(stuck, b);
       }
     }
-    rt_log("heartbeat: %llu frames (+%llu), %llu file opens, %.1f MB read (+%.1f), %llu memory commits%s%s",
+    extern u64 g_stat_pad;
+    rt_log("heartbeat: %llu frames (+%llu), %llu file opens, %.1f MB read (+%.1f), %llu memory commits, %llu pad reads%s%s",
            (unsigned long long)fr, (unsigned long long)(fr - last_frames), (unsigned long long)g_stat_opens,
-           rd / 1048576.0, (rd - last_read) / 1048576.0, (unsigned long long)g_stat_valloc,
+           rd / 1048576.0, (rd - last_read) / 1048576.0, (unsigned long long)g_stat_valloc, (unsigned long long)g_stat_pad,
            stuck[0] ? "; waiting in" : "", stuck);
     last_frames = fr; last_read = rd;
   }

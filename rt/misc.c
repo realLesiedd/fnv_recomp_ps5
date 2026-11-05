@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include "rt.h"
 #include <string.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <time.h>
 
@@ -89,9 +90,41 @@ API(n_ntohs) { u32 v = ARG(0) & 0xffff; RETURN_STD(1, ((v & 0xff) << 8) | (v >> 
 
 /* XInput: no controller */
 #include "platform.h"
+/* test hook (FNV_PADSCRIPT="30:down,31:a"): scripted presses on controller 0 at the given
+   seconds after start, for reproducing menu flows in automated runs */
+static int pad_script(PlatPad *p, u32 *packet) {
+  static int init; static double t0; static struct { double t; u16 b; } ev[32]; static int n;
+  if (!init) {
+    init = 1;
+    const char *e = getenv("FNV_PADSCRIPT");
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); t0 = ts.tv_sec + ts.tv_nsec / 1e9;
+    for (; e && *e && n < 32;) {
+      double t = strtod(e, (char **)&e); if (*e == ':') e++;
+      u16 b = !strncmp(e, "down", 4) ? 0x2 : !strncmp(e, "up", 2) ? 0x1 : !strncmp(e, "a", 1) ? 0x1000 :
+              !strncmp(e, "b", 1) ? 0x2000 : !strncmp(e, "start", 5) ? 0x10 : 0;
+      ev[n].t = t; ev[n].b = b; n++;
+      while (*e && *e != ',') e++; if (*e == ',') e++;
+    }
+  }
+  if (!n) return 0;
+  struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+  double now = ts.tv_sec + ts.tv_nsec / 1e9 - t0;
+  if (now < ev[0].t - 4) return 0; /* plugged in shortly before the first press, like a real pad */
+  memset(p, 0, sizeof *p);
+  for (int i = 0; i < n; i++)
+    if (now >= ev[i].t && now < ev[i].t + 0.25) {
+      p->buttons |= ev[i].b;
+      if (ev[i].b == 0x2) p->ly = -32000; /* the menus also follow the left stick */
+      if (ev[i].b == 0x1) p->ly = 32000;
+    }
+  *packet = (u32)(now * 10);
+  return 1;
+}
+u64 g_stat_pad;
 API(x_XInputGetState) {
   PlatPad p; u32 packet; u32 st = ARG(1);
-  if (!plat_pad(ARG(0), &p, &packet)) RETURN_STD(2, 1167); /* ERROR_DEVICE_NOT_CONNECTED */
+  g_stat_pad++;
+  if (!(ARG(0) == 0 && pad_script(&p, &packet)) && !plat_pad(ARG(0), &p, &packet)) RETURN_STD(2, 1167); /* ERROR_DEVICE_NOT_CONNECTED */
   M32(st) = packet; M16(st + 4) = p.buttons; M8(st + 6) = p.lt; M8(st + 7) = p.rt;
   M16(st + 8) = p.lx; M16(st + 10) = p.ly; M16(st + 12) = p.rx; M16(st + 14) = p.ry;
   RETURN_STD(2, 0);
@@ -113,6 +146,19 @@ API(gx_SteamAPI_UnregisterCallback) { RETURN_CDECL(0); }
 API(gx_null) { RETURN_CDECL(0); }
 
 API(d_D3DPERF_SetOptions) { RETURN_STD(1, 0); }
+
+/* binkw32 (RAD Bink video: the intro movie and a few others). No decoder yet: BinkOpen
+   reports the movie as unavailable, which the game handles ("Could not open ... for
+   playback") by skipping it. */
+API(bk_BinkOpen) { rt_log("Bink: skipping movie %s (no video decoder yet)", ARG(0) ? STR(ARG(0)) : "?"); RETURN_STD(2, 0); }
+API(bk_BinkSetSoundSystem) { RETURN_STD(2, 1); }
+API(bk_BinkOpenDirectSound) { RETURN_STD(1, 0); }
+API(bk_BinkClose) { RETURN_STD(1, 0); }
+API(bk_BinkNextFrame) { RETURN_STD(1, 0); }
+API(bk_BinkWait) { RETURN_STD(1, 0); }
+API(bk_BinkPause) { RETURN_STD(2, 0); }
+API(bk_BinkDoFrame) { RETURN_STD(1, 0); }
+API(bk_BinkCopyToBufferRect) { RETURN_STD(11, 0); }
 
 static const ApiEntry list[] = {
   {"ADVAPI32.dll", "RegOpenKeyExA", a_RegOpenKeyExA}, {"ADVAPI32.dll", "RegCreateKeyExA", a_RegCreateKeyExA},
@@ -141,6 +187,11 @@ static const ApiEntry list[] = {
   {"GalaxyWrp.dll", "SteamUserStats", gx_null}, {"GalaxyWrp.dll", "SteamApps", gx_null},
   {"GalaxyWrp.dll", "SteamUtils", gx_null},
   {"d3d9.dll", "D3DPERF_SetOptions", d_D3DPERF_SetOptions},
+  {"binkw32.dll", "_BinkOpen@8", bk_BinkOpen}, {"binkw32.dll", "_BinkSetSoundSystem@8", bk_BinkSetSoundSystem},
+  {"binkw32.dll", "_BinkOpenDirectSound@4", bk_BinkOpenDirectSound}, {"binkw32.dll", "_BinkClose@4", bk_BinkClose},
+  {"binkw32.dll", "_BinkNextFrame@4", bk_BinkNextFrame}, {"binkw32.dll", "_BinkWait@4", bk_BinkWait},
+  {"binkw32.dll", "_BinkPause@8", bk_BinkPause}, {"binkw32.dll", "_BinkDoFrame@4", bk_BinkDoFrame},
+  {"binkw32.dll", "_BinkCopyToBufferRect@44", bk_BinkCopyToBufferRect},
   {0}};
 
 void misc_init(void) { api_register(list); }

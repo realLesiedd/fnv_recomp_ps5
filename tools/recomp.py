@@ -952,9 +952,30 @@ class Emitter:
         if n == 16: return 'XMM s;memcpy(&s,HP(%s),16);' % self.ea(i, o)
         return 'XMM s={0};memcpy(&s,HP(%s),%d);' % (self.ea(i, o), n)
 
+    def mmx(self, i, mn, ops):
+        def opnd(o):
+            if self.is_reg(o):
+                n = i.reg_name(o.reg)
+                if n.startswith('mm'): return 'c->mm[%d]' % int(n[2:])
+                raise Unsupported('mmx operand ' + n)
+            if self.is_mem(o): return 'M64(%s)' % self.ea(i, o)
+            raise Unsupported('mmx operand')
+        d, s_ = ops[0], ops[1]
+        if mn == 'movq':
+            return '{u64 v=%s;%s=v;}' % (opnd(s_), opnd(d))
+        ops_w = {'paddw': 0, 'psubw': 1, 'pcmpgtw': 2}
+        if mn in ops_w:
+            return '%s=mmx_w(%s,%s,%d);' % (opnd(d), opnd(d), opnd(s_), ops_w[mn])
+        bit = {'pand': '&', 'por': '|', 'pxor': '^'}
+        if mn in bit:
+            return '%s%s=%s;' % (opnd(d), bit[mn], opnd(s_))
+        if mn == 'pandn':
+            return '%s=~%s&%s;' % (opnd(d), opnd(d), opnd(s_))
+        raise Unsupported('mmx ' + mn)
+
     def sse(self, i, mn, ops):
         if any(self.is_reg(o) and i.reg_name(o.reg).startswith('mm') for o in ops):
-            raise Unsupported('mmx')
+            return self.mmx(i, mn, ops)
         d = ops[0] if ops else None
         D = lambda: 'c->xmm[%d]' % self.xr(i, d)
         if mn in ('movaps', 'movups', 'movdqa', 'movdqu', 'movapd', 'movupd', 'movntps', 'movntdq', 'movntpd'):

@@ -55,6 +55,7 @@ typedef struct Ctx {
   u32 last_error;
   int thread_index;
   void *host; /* per-thread runtime data */
+  u64 mm[8];  /* MMX registers (kept apart from the x87 stack: the game never mixes them) */
 } Ctx;
 
 typedef void (*GuestFn)(Ctx *restrict);
@@ -254,6 +255,17 @@ static inline s32 cvt_d2i(Ctx *c, double v, int trunc_) {
   double d = trunc_ ? trunc(v) : nearbyint(v);
   if (!(d >= -2147483648.0 && d < 2147483648.0)) return (s32)0x80000000;
   return (s32)d;
+}
+
+/* ---- MMX (16-bit lanes) ------------------------------------------------------ */
+static inline u64 mmx_w(u64 a, u64 b, int op) {
+  u64 r = 0;
+  for (int k = 0; k < 4; k++) {
+    s16 x = (s16)(a >> (16 * k)), y = (s16)(b >> (16 * k));
+    u16 v = op == 0 ? (u16)(x + y) : op == 1 ? (u16)(x - y) : (x > y ? 0xffff : 0);
+    r |= (u64)v << (16 * k);
+  }
+  return r;
 }
 
 /* ---- runtime entry points used by generated code --------------------------- */
