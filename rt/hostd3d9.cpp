@@ -40,11 +40,12 @@ extern "C" int hb_init(void) {
   }
 #ifdef __PROSPERO__
   setenv("DXVK_WSI_DRIVER", "PS5", 0);
-  /* 16 shader-compiler threads by default: each costs host (flexible) memory, more so during compile bursts */
-  setenv("DXVK_CONFIG", "dxvk.numCompilerThreads = 4", 0);
+  /* 16 shader-compiler threads by default. v14/v15 used 4 to save host memory, but v15 showed 0.7 s stutters in
+     game and 331 MB of host memory free, so 8 */
+  setenv("DXVK_CONFIG", "dxvk.numCompilerThreads = 8", 0);
   setenv("DXVK_LOG_PATH", "/app0", 0);
   /* performance overlay for now: fps, frame times, GPU load (scaled for a 4K TV) */
-  setenv("DXVK_HUD", "fps,frametimes,gpuload,scale=2", 0);
+  setenv("DXVK_HUD", "fps,frametimes,gpuload,compiler,scale=2", 0);
 #else
   setenv("DXVK_WSI_DRIVER", "SDL2", 0);
 #endif

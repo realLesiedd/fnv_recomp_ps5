@@ -23,7 +23,7 @@
 #include <ucontext.h>
 #endif
 
-#define FNV_RELEASE "v15" /* printed at the top of the log so a log shows which build produced it */
+#define FNV_RELEASE "v16" /* printed at the top of the log so a log shows which build produced it */
 
 int g_trace;
 u32 g_peb;
@@ -496,7 +496,12 @@ static void perf_line(void) {
         break;
       }
   }
-  if (pc >= 0 && prev_proc >= 0 && span > 0) {
+#ifdef __PROSPERO__
+  guest = -1; /* per-thread CPU clocks read 0 on PS5 (v15 logs): only the process total means anything */
+#endif
+  if (pc >= 0 && prev_proc >= 0 && span > 0 && guest < 0)
+    o += snprintf(b + o, sizeof b - o, ", process %.0f%%", 100.0 * (pc - prev_proc) / span);
+  else if (pc >= 0 && prev_proc >= 0 && span > 0) {
     double all = 100.0 * (pc - prev_proc) / span;
     o += snprintf(b + o, sizeof b - o, ", process %.0f%% (game threads %.0f%%, other threads %.0f%%; busiest", all, guest,
                   all - guest > 0 ? all - guest : 0);

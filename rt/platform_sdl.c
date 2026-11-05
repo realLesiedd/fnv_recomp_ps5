@@ -25,7 +25,7 @@ int plat_init(void) {
   g_win = (SDL_Window *)&g_token;
   g_vulkan = 1;
   for (int i = 0; i < SDL_NumJoysticks() && i < 4; i++)
-    if (SDL_IsGameController(i)) { g_pad[i] = SDL_GameControllerOpen(i); rt_log("platform: controller %d (%s)", i, SDL_GameControllerName(g_pad[i])); }
+    if (SDL_IsGameController(i)) { g_pad[i] = SDL_GameControllerOpen(i); rt_log("platform: controller %d connected", i); } /* no name: on PS5 it is the player's account name */
   return 1;
 }
 #else
@@ -116,7 +116,7 @@ void plat_pump(void) {
     }
     case SDL_CONTROLLERDEVICEADDED: {
       int i = e.cdevice.which;
-      for (int s = 0; s < 4; s++) if (!g_pad[s]) { g_pad[s] = SDL_GameControllerOpen(i); rt_log("platform: controller %d connected (%s)", s, SDL_GameControllerName(g_pad[s])); break; }
+      for (int s = 0; s < 4; s++) if (!g_pad[s]) { g_pad[s] = SDL_GameControllerOpen(i); rt_log("platform: controller %d connected", s); break; }
       break;
     }
     case SDL_CONTROLLERDEVICEREMOVED:

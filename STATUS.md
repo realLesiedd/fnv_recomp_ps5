@@ -88,7 +88,13 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   - The game draws movies as fixed-function textured tiles, which came out black through DXVK here. The GPU
     backend instead draws the decoded frame over the whole screen before presenting.
   - The Credits screen (main menu) already worked: scrolling credits over the artwork.
-- **To watch:** only about 70 MB of host (flexible) memory is free. The old "all threads 100%" figure came from a
+- **v15 on PS5:** 331 MB of host (flexible) memory free, unchanged through play; it was 70 MB in v13. Video memory
+  stays around 1.1 GB instead of climbing. D3D objects are freed (2,500 live of 17,800 created). Exit closes
+  cleanly. Process CPU is 45% in menus and up to 370% while loading, so no thread spins; per-thread CPU clocks read 0
+  on PS5. Three 0.7 s stutters in about 100 s of play (v13's worst was 0.2 s).
+- **v16:** 8 shader-compiler threads (from 4), and DXVK's "compiling shaders" HUD indicator to tie stutters to
+  shader compiles. The controller's name (the player's account name on PS5) is no longer logged.
+- **To watch:** stutters in game. The old "all threads 100%" figure came from a
   process clock that is not meaningful on PS5; v14 uses getrusage plus per-thread clocks.
 
 ## Roadmap (the player's goals, in order)
