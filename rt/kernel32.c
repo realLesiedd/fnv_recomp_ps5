@@ -313,7 +313,8 @@ API(k_GlobalMemoryStatusEx) {
 /* ---- memory ---------------------------------------------------------------- */
 API(k_VirtualAlloc) {
   u32 r = vm_alloc(ARG(0), ARG(1), ARG(2), ARG(3));
-  TRACE("VirtualAlloc(%08x, %x, %x) = %08x", ARG(0), ARG(1), ARG(2), r);
+  __atomic_add_fetch(&g_stat_valloc, 1, __ATOMIC_RELAXED);
+  if (g_trace > 1) rt_log("VirtualAlloc(%08x, %x, %x) = %08x", ARG(0), ARG(1), ARG(2), r);
   if (!r) rt_set_error(c, 8);
   RETURN_STD(4, r);
 }
@@ -642,6 +643,7 @@ static u32 create_file(Ctx *c, const char *name, u32 access, u32 disp) {
   int existed = stat(hp, &st) == 0;
   if (existed && S_ISDIR(st.st_mode)) { rt_set_error(c, 5); return 0xffffffff; }
   int fd = open(hp, fl, 0644);
+  __atomic_add_fetch(&g_stat_opens, 1, __ATOMIC_RELAXED);
   TRACE("CreateFile(%s -> %s, %x, %u) = %d", name, hp, access, disp, fd);
   if (fd < 0) { rt_set_error(c, errno_to_win(errno)); return 0xffffffff; }
   u32 h = h_new(H_FILE);
@@ -661,6 +663,7 @@ API(k_ReadFile) {
   int fd = win_fd(c, ARG(0));
   if (fd < 0) { rt_set_error(c, 6); RETURN_STD(5, 0); }
   ssize_t r = read(fd, HP(ARG(1)), ARG(2));
+  if (r > 0) __atomic_add_fetch(&g_stat_read, (u64)r, __ATOMIC_RELAXED);
   if (ARG(3)) M32(ARG(3)) = r < 0 ? 0 : r;
   RETURN_STD(5, r >= 0);
 }
@@ -728,7 +731,7 @@ API(k_CreateDirectoryA) {
 static u32 attrs_of(struct stat *st) { return S_ISDIR(st->st_mode) ? 0x10 : 0x80; }
 API(k_GetFileAttributesA) {
   char hp[2048]; struct stat st; fs_host_path(STR(ARG(0)), hp, sizeof hp);
-  if (stat(hp, &st)) { rt_set_error(c, 2); TRACE("GetFileAttributes(%s) missing", STR(ARG(0))); RETURN_STD(1, 0xffffffff); }
+  if (stat(hp, &st)) { rt_set_error(c, 2); if (g_trace > 1) rt_log("GetFileAttributes(%s) missing", STR(ARG(0))); RETURN_STD(1, 0xffffffff); }
   RETURN_STD(1, attrs_of(&st));
 }
 API(k_GetFullPathNameA) {
@@ -778,7 +781,7 @@ API(k_FindFirstFileA) {
   if (sl) { *sl = 0; snprintf(dirw, sizeof dirw, "%s", w); } else strcpy(dirw, ".");
   char hp[2048]; fs_host_path(dirw, hp, sizeof hp);
   DIR *d = opendir(hp);
-  TRACE("FindFirstFile(%s) dir=%s", pat, hp);
+  if (g_trace > 1) rt_log("FindFirstFile(%s) dir=%s", pat, hp);
   if (!d) { rt_set_error(c, 3); RETURN_STD(2, 0xffffffff); }
   u32 h = h_new(H_FIND); HObj *o = h_get(h);
   o->dir = d; o->pattern = strdup(!strcmp(mask, "*.*") ? "*" : mask); o->dirpath = strdup(hp);

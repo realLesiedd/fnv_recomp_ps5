@@ -12,12 +12,18 @@
 #endif
 #include <dlfcn.h>
 #include <errno.h>
+#include <time.h>
 #include <sys/stat.h>
 
 int g_trace;
 u32 g_peb;
 static __thread Ctx *t_ctx;
 static __thread const char *t_last_api;
+#define MAXTHR 64
+static const char *volatile g_in_api[MAXTHR];
+static volatile double g_in_api_since[MAXTHR];
+static double mono_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
+u64 g_stat_valloc, g_stat_opens, g_stat_read;
 static pthread_mutex_t g_log_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void rt_log(const char *fmt, ...) {
@@ -25,7 +31,12 @@ void rt_log(const char *fmt, ...) {
   va_start(ap, fmt);
   pthread_mutex_lock(&g_log_lock);
   Ctx *c = t_ctx;
-  fprintf(stderr, "[t%d] ", c ? c->thread_index : -1);
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  static double t0;
+  double now = ts.tv_sec + ts.tv_nsec / 1e9;
+  if (t0 == 0) t0 = now;
+  fprintf(stderr, "[%8.3f t%d] ", now - t0, c ? c->thread_index : -1);
   vfprintf(stderr, fmt, ap);
   fputc('\n', stderr);
   pthread_mutex_unlock(&g_log_lock);
@@ -118,7 +129,12 @@ void rt_call_ind(Ctx *restrict c, u32 t) {
     if (i < (u32)g_thunk_count && (t & 15) == 0) {
       if (g_trace > 1) rt_log("-> %s (ret %08x)", g_thunk_name[i], M32(c->r[4]));
       t_last_api = g_thunk_name[i];
+      int ti = c->thread_index & (MAXTHR - 1);
+      const char *outer = g_in_api[ti];
+      double outer_since = g_in_api_since[ti];
+      if (!outer) { g_in_api_since[ti] = mono_now(); g_in_api[ti] = g_thunk_name[i]; }
       g_thunk_fn[i](c);
+      g_in_api[ti] = outer; g_in_api_since[ti] = outer_since; /* host calls can nest (window procs) */
       return;
     }
   }
@@ -264,6 +280,47 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
 
 extern void api_set_cmdline(const char *);
 
+/* heartbeat: every 5 s, one log line with progress counters and any thread that has been
+   inside a single system call for more than 2 s (where a stall is) */
+static void *heartbeat(void *arg) {
+  (void)arg;
+  u64 last_frames = 0, last_read = 0;
+  for (int n = 0;; n++) {
+    struct timespec d = {1, 0};
+    nanosleep(&d, NULL);
+    fflush(stderr);
+    if (n % 5 != 4) continue;
+    u64 fr = g_d3d_frames, rd = g_stat_read;
+    char stuck[512] = "";
+    double now = mono_now();
+    for (int i = 0; i < MAXTHR; i++) {
+      const char *a = g_in_api[i];
+      double since = g_in_api_since[i];
+      /* idle workers park in waits for good; report waits only on the main thread */
+      int idle = a && (strstr(a, "WaitFor") || strstr(a, "!Sleep") || strstr(a, "ExitThread"));
+      if (a && since && now - since > 2.0 && (!idle || i == 0) && strlen(stuck) < 400) {
+        char b[96];
+        snprintf(b, sizeof b, " t%d:%s(%.0fs)", i, a, now - since);
+        strcat(stuck, b);
+      }
+    }
+    rt_log("heartbeat: %llu frames (+%llu), %llu file opens, %.1f MB read (+%.1f), %llu memory commits%s%s",
+           (unsigned long long)fr, (unsigned long long)(fr - last_frames), (unsigned long long)g_stat_opens,
+           rd / 1048576.0, (rd - last_read) / 1048576.0, (unsigned long long)g_stat_valloc,
+           stuck[0] ? "; waiting in" : "", stuck);
+    last_frames = fr; last_read = rd;
+  }
+  return NULL;
+}
+void rt_heartbeat_start(void) {
+  pthread_t th;
+  pthread_attr_t at;
+  pthread_attr_init(&at);
+  pthread_attr_setstacksize(&at, 256 << 10);
+  if (pthread_create(&th, &at, heartbeat, NULL) == 0) pthread_detach(th);
+  pthread_attr_destroy(&at);
+}
+
 int main(int argc, char **argv) {
   const char *exe = getenv("FNV_EXE");
   const char *game = getenv("FNV_GAME_DIR");
@@ -274,7 +331,7 @@ int main(int argc, char **argv) {
   if (!game) game = "/app0/game";
   if (!getenv("FNV_USER_DIR")) setenv("FNV_USER_DIR", "/app0/user", 1);
   if (!freopen("/app0/fnv.log", "w", stderr)) perror("log file");
-  setvbuf(stderr, NULL, _IOLBF, 0);
+  setvbuf(stderr, NULL, _IOFBF, 1 << 16); /* written in blocks; the heartbeat flushes every second */
   if (!getenv("FNV_TRACE")) g_trace = 1;
 #endif
   if (!game) game = "game";
@@ -294,6 +351,7 @@ int main(int argc, char **argv) {
   sigaction(SIGFPE, &sa, NULL);
   sigaction(SIGILL, &sa, NULL);
 
+  rt_heartbeat_start();
   { extern void rt_first_run(void); rt_first_run(); }
   mem_init();
   map_image(exe);

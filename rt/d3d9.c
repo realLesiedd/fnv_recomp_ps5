@@ -107,7 +107,9 @@ static u64 g_frames, g_draws, g_prims;
 static int g_shot_every, g_render_every;
 static void be_present_shot(void);
 static void be_platform_present(void);
+u64 g_d3d_frames;
 static void be_present(void) {
+  g_d3d_frames = g_frames + 1;
   be_present_shot();
   be_platform_present();
   g_frames++;

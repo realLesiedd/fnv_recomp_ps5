@@ -41,6 +41,8 @@ extern "C" int hb_init(void) {
 #ifdef __PROSPERO__
   setenv("DXVK_WSI_DRIVER", "PS5", 0);
   setenv("DXVK_LOG_PATH", "/app0", 0);
+  /* performance overlay for now: fps, frame times, GPU load (scaled for a 4K TV) */
+  setenv("DXVK_HUD", "fps,frametimes,gpuload,scale=2", 0);
 #else
   setenv("DXVK_WSI_DRIVER", "SDL2", 0);
 #endif

@@ -95,3 +95,8 @@ char *rt_strcasestr(const char *hay, const char *needle);
 int rt_wildmatch(const char *pat, const char *s);            /* '*' and '?', ignoring case; 1 = match */
 const char *rt_realpath(const char *p, char *buf, size_t n); /* absolute path, or p itself */
 void rt_exit(int code) __attribute__((noreturn));
+
+/* counters for the heartbeat log line */
+extern u64 g_stat_valloc, g_stat_opens, g_stat_read;
+extern u64 g_d3d_frames;
+void rt_heartbeat_start(void);
