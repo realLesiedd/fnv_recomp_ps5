@@ -1220,6 +1220,7 @@ HOOKS = {
     0x7CFD20,  # re-enables the Continue/Load tiles: tolerate the Continue tile not existing
     0x789820,  # LoadingMenu::Update: no menu (quitting) -> return instead of reading null+0x5BC
     0x78D080,  # UpdateLoadingMenuState from the loading-screen thread once the menu is gone -> skip
+    0x7D0BF0,  # Exit Game: close the app right away (PS5: back to the home screen) instead of tearing down
 }
 
 

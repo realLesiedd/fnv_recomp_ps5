@@ -185,10 +185,35 @@ const char *rt_realpath(const char *p, char *buf, size_t n) {
   return buf;
 }
 
+#ifdef __PROSPERO__
+#include <signal.h>
+#include <unistd.h>
+int sceKernelLoadStartModule(const char *, size_t, const void *, unsigned, void *, int *);
+int sceKernelDlsym(int, const char *, void **);
+int sceKernelUsleep(unsigned);
+/* Close the app the way FileDen does: ask the system to exit it (sceSystemServiceLoadExec("exit")), which goes
+ * back to the home screen without an error report; if that does not take, kill the process. */
+static void ps5_close_app(void) {
+  static const char *mods[] = {"libSceSystemService.sprx", "/system/common/lib/libSceSystemService.sprx", 0};
+  int (*load_exec)(const char *, const char **) = 0;
+  for (int i = 0; mods[i] && !load_exec; i++) {
+    int h = sceKernelLoadStartModule(mods[i], 0, 0, 0, 0, 0);
+    void *f = 0;
+    if (h >= 0 && !sceKernelDlsym(h, "sceSystemServiceLoadExec", &f) && f) load_exec = (int (*)(const char *, const char **))f;
+  }
+  if (load_exec) {
+    int r = load_exec("exit", 0);
+    for (int i = 0; r == 0 && i < 15; i++) sceKernelUsleep(100000);
+  }
+  kill(getpid(), SIGKILL);
+}
+#endif
 void rt_exit(int code) {
+  rt_log("closing (exit code %d)", code);
   fflush(NULL);
 #ifdef __PROSPERO__
-  exit(code); /* _exit's direct syscall is refused to a PS5 app (SIGSYS) */
+  ps5_close_app();
+  exit(code); /* only if the system did not close the app; _exit's direct syscall is refused (SIGSYS) */
 #else
   _exit(code);
 #endif

@@ -7,6 +7,7 @@ void o_007CBAF0(Ctx *restrict c);
 void o_007CFD20(Ctx *restrict c);
 void o_00789820(Ctx *restrict c);
 void o_0078D080(Ctx *restrict c);
+void o_007D0BF0(Ctx *restrict c);
 
 /* Same test the start menu itself makes: any *.fos in the save folder. */
 static int saves_exist(void) {
@@ -41,6 +42,20 @@ void h_007CBAF0(Ctx *restrict c) {
       else if (have && (hidden & (1u << (i & 31)))) { M32(opt + 12) |= 1; hidden &= ~(1u << (i & 31)); }
     }
     rt_log("main menu: %s", have ? "saves found, Continue listed" : "no saves, Continue not listed");
+    if (getenv("FNV_DUMP_MENU"))
+      for (u32 i = 0; i < n && i < 64; i++) {
+        u32 opt = M32(data + 4 * i), w[8];
+        for (int k = 0; k < 8; k++) w[k] = M32(opt + 4 * k);
+        char txt[64] = "";
+        for (int k = 0; k < 8 && !txt[0]; k++) /* the first field that points at printable text */
+          if (w[k] > 0x10000 && w[k] < 0xF0000000u) {
+            const u8 *t = HP(w[k]);
+            int j = 0;
+            while (j < 40 && t[j] >= 32 && t[j] < 127) j++;
+            if (j >= 3 && !t[j]) snprintf(txt, sizeof txt, "+%d \"%s\"", 4 * k, (const char *)t);
+          }
+        rt_log("  option %u: callback %08x flags %08x %s", i, M32(opt + 8), M32(opt + 12), txt);
+      }
   }
   o_007CBAF0(c);
 }
@@ -71,4 +86,13 @@ void h_00789820(Ctx *restrict c) { /* thiscall, no stack arguments */
 void h_0078D080(Ctx *restrict c) { /* no arguments; only the loading-screen thread's call (returns to 0x78D55C) */
   if (M32(c->r[4]) == 0x78D55Cu && !M32(LOADING_MENU)) { c->r[4] += 4; return; }
   o_0078D080(c);
+}
+
+/* Exit Game (the Quit confirmation). The original hides the menus, draws a last frame and raises the game's quit
+ * flag; the game would then tear itself down, and that teardown has crashes of its own (above). Close the app
+ * right away instead, the way FileDen closes: back to the PS5 home screen. */
+void h_007D0BF0(Ctx *restrict c) {
+  o_007D0BF0(c);
+  rt_log("Exit Game chosen: closing the app");
+  rt_exit(0);
 }
