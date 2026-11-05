@@ -53,8 +53,11 @@ API(o_CoUninitialize) { RETURN_STD(0, 0); }
 API(o_CoFreeUnusedLibraries) { RETURN_STD(0, 0); }
 API(o_CoTaskMemAlloc) { RETURN_STD(1, heap_alloc(ARG(0), 0)); }
 API(o_CoTaskMemFree) { heap_free(ARG(0)); RETURN_STD(1, 0); }
+extern u32 dshow_create(u32);
 API(o_CoCreateInstance) {
   u32 g = ARG(0);
+  u32 obj = dshow_create(M32(g));
+  if (obj) { TRACE("CoCreateInstance(FilterGraph) -> silent graph"); M32(ARG(4)) = obj; RETURN_STD(5, 0); }
   rt_log("CoCreateInstance({%08x-...}) -> class not registered", M32(g));
   if (ARG(4)) M32(ARG(4)) = 0;
   RETURN_STD(5, 0x80040154);

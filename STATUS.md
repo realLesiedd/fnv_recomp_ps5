@@ -18,13 +18,16 @@
   - Resource memory lives in guest memory, so Lock calls hand back plain pointers.
   - Drawing is a **null renderer**: it counts draw calls and frames but produces no pixels.
 - **D3DX math** (`rt/d3dx.c`): matrix and vector helpers, ID3DXBuffer and the shader profile queries.
-- **Where it stops.** With `FalloutPrefs.ini` naming the adapter (see below), the game goes further:
-  - it creates the D3D9 device at 1280x720;
-  - it writes RendererInfo.txt;
-  - it looks for its shader packages and effect textures in `Data\`;
-  - it builds the menu UI root.
-  It then crashes on `Data\Menus\globals.xml`, because this container has no game data. It's a null pointer in
-  the game's own code (`InterfaceManager::InitInterface`, 0x70ADB0), not a runtime bug.
+- **DDS texture loading** (D3DXCreate*TextureFromFileInMemory, D3DXGetImageInfoFromFileInMemory).
+- **A silent DirectShow graph** for the music player.
+- **Main menu reached (headless).** Tested with a real Steam install (app 22380 with all DLC), with the
+  GOG exe swapped in.
+  - It loads the 10 plugins (FalloutNV.esm plus all DLC .esm files) and every BSA.
+  - It shows the loading screens, then builds the start menu (`Menus\Options\start_menu.xml`, `main_title.dds`,
+    `main_background.dds`).
+  - It then stays in the main menu loop: over 19,500 frames in 2 minutes, about 19 draw calls per frame, with no
+    errors.
+  - Nothing is visible yet, because the renderer is the null backend.
 
 ### First-run config
 

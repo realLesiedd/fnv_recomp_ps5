@@ -821,4 +821,110 @@ static void fill_caps(u32 p) {
 static const ApiEntry list[] = {
   {"d3d9.dll", "Direct3DCreate9", Direct3DCreate9},
   {0}};
-void d3d9_init(void) { api_register(list); }
+void d3d9_tex_init(void);
+void d3d9_init(void) { api_register(list); d3d9_tex_init(); }
+
+/* ---- D3DX texture loading from DDS files in memory -------------------------- */
+typedef struct { u32 w, h, d, mips, fmt, rtype, src_bpp, convert24; int cube, volume; u32 data; } DdsInfo;
+static int dds_parse(u32 p, u32 n, DdsInfo *o) {
+  memset(o, 0, sizeof *o);
+  if (n < 128 || M32(p) != FOURCC('D', 'D', 'S', ' ')) return 0;
+  u32 h = p + 4;
+  o->h = M32(h + 8); o->w = M32(h + 12); o->d = M32(h + 20); o->mips = M32(h + 24);
+  if (!(M32(h + 4) & 0x20000) || !o->mips) o->mips = 1;
+  u32 pf = h + 72, pflags = M32(pf + 4), cc = M32(pf + 8), bits = M32(pf + 12);
+  u32 rm = M32(pf + 16), gm = M32(pf + 20), bm = M32(pf + 24), am = M32(pf + 28);
+  u32 caps2 = M32(h + 108);
+  o->cube = (caps2 & 0x200) != 0;
+  o->volume = (caps2 & 0x200000) != 0 && o->d > 1;
+  if (!o->volume) o->d = 1;
+  o->data = p + 128;
+  if (pflags & 4) { /* fourcc */
+    if (cc == FOURCC('D','X','1','0')) return 0;
+    o->fmt = cc;
+  } else if (bits == 32) o->fmt = am ? (rm == 0xff ? 32 : 21) : (rm == 0xff ? 33 : 22);
+  else if (bits == 24) { o->fmt = 22; o->convert24 = 1; }
+  else if (bits == 16) {
+    if (pflags & 0x20000) o->fmt = 51;                         /* luminance+alpha */
+    else if (rm == 0xf800) o->fmt = 23;
+    else if (rm == 0x7c00) o->fmt = am ? 25 : 24;
+    else if (rm == 0xf00) o->fmt = 26;
+    else o->fmt = 23;
+  } else if (bits == 8) o->fmt = (pflags & 0x20000) ? 50 : (pflags & 2) && !rm ? 28 : 50;
+  else return 0;
+  (void)gm; (void)bm;
+  o->rtype = o->cube ? 5 : o->volume ? 4 : 3;
+  return 1;
+}
+static void dds_fill(Obj *t, DdsInfo *in, u32 src_end) {
+  u32 src = in->data;
+  int faces = in->cube ? 6 : 1;
+  for (int f = 0; f < faces; f++) {
+    u32 w = in->w, h = in->h, d = in->d;
+    for (u32 l = 0; l < in->mips; l++) {
+      u32 pitch, sz; level_layout(t->fmt, w, h, &pitch, &sz);
+      if (in->convert24) {
+        u32 rows = h * d;
+        for (u32 y = 0; y < rows && src + 3 * w <= src_end; y++) {
+          u32 dst = (l < t->levels) ? t->data[f][l] + y * pitch : 0;
+          for (u32 x = 0; x < w && dst; x++)
+            M32(dst + 4 * x) = 0xff000000u | M8(src + 3 * x) | (M8(src + 3 * x + 1) << 8) | (M8(src + 3 * x + 2) << 16);
+          src += 3 * w;
+        }
+      } else {
+        u32 n = sz * d;
+        if (l < t->levels && src + n <= src_end) memcpy(HP(t->data[f][l]), HP(src), n);
+        src += n;
+      }
+      w = w > 1 ? w / 2 : 1; h = h > 1 ? h / 2 : 1; d = d > 1 ? d / 2 : 1;
+    }
+  }
+}
+static u32 g_dds_fail;
+API(x_GetImageInfoFromFileInMemory) {
+  DdsInfo in;
+  if (!dds_parse(ARG(0), ARG(1), &in)) {
+    if (g_dds_fail++ < 10) rt_log("D3DX: image is not a supported DDS (%.4s)", (char *)HP(ARG(0)));
+    RETURN_STD(3, 0x88760B59u); /* D3DXERR_INVALIDDATA */
+  }
+  u32 p = ARG(2);
+  if (p) { M32(p) = in.w; M32(p + 4) = in.h; M32(p + 8) = in.d; M32(p + 12) = in.mips; M32(p + 16) = in.fmt; M32(p + 20) = in.rtype; M32(p + 24) = 4; }
+  RETURN_STD(3, S_OK);
+}
+static u32 tex_from_mem(Ctx *c, u32 src, u32 n, int want) {
+  DdsInfo in;
+  if (!dds_parse(src, n, &in)) return 0;
+  init_vtables();
+  int kind = in.cube ? K_CUBE : in.volume ? K_VOLUME : K_TEXTURE;
+  if (want && kind != want) return 0;
+  u32 g = make_texture(kind, in.w, in.h, in.d, in.mips, 0, in.fmt, 1);
+  dds_fill(obj(g), &in, src + n);
+  return g;
+}
+API(x_CreateTextureFromFileInMemory) {
+  u32 g = tex_from_mem(c, ARG(1), ARG(2), 0);
+  M32(ARG(3)) = g;
+  RETURN_STD(4, g ? S_OK : 0x88760B59u);
+}
+API(x_CreateCubeTextureFromFileInMemory) {
+  u32 g = tex_from_mem(c, ARG(1), ARG(2), K_CUBE);
+  M32(ARG(3)) = g;
+  RETURN_STD(4, g ? S_OK : 0x88760B59u);
+}
+API(x_CreateVolumeTextureFromFileInMemory) {
+  u32 g = tex_from_mem(c, ARG(1), ARG(2), K_VOLUME);
+  M32(ARG(3)) = g;
+  RETURN_STD(4, g ? S_OK : 0x88760B59u);
+}
+API(x_LoadSurfaceFromSurface) { copy_surface(ARG(3), ARG(0)); RETURN_STD(8, S_OK); }
+API(x_SaveTextureToFileA) { RETURN_STD(4, S_OK); }
+
+static const ApiEntry xlist[] = {
+  {"d3dx9_38.dll", "D3DXGetImageInfoFromFileInMemory", x_GetImageInfoFromFileInMemory},
+  {"d3dx9_38.dll", "D3DXCreateTextureFromFileInMemory", x_CreateTextureFromFileInMemory},
+  {"d3dx9_38.dll", "D3DXCreateCubeTextureFromFileInMemory", x_CreateCubeTextureFromFileInMemory},
+  {"d3dx9_38.dll", "D3DXCreateVolumeTextureFromFileInMemory", x_CreateVolumeTextureFromFileInMemory},
+  {"d3dx9_38.dll", "D3DXLoadSurfaceFromSurface", x_LoadSurfaceFromSurface},
+  {"d3dx9_38.dll", "D3DXSaveTextureToFileA", x_SaveTextureToFileA},
+  {0}};
+void d3d9_tex_init(void) { api_register(xlist); }
