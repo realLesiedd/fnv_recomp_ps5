@@ -6,6 +6,9 @@
  * returns); flags are evaluated lazily from the last flag-writing operation so
  * the C compiler can fold them away when the condition is known statically. */
 #pragma once
+#ifdef __cplusplus
+#define restrict __restrict
+#endif
 #include <stdint.h>
 #include <string.h>
 #include <math.h>

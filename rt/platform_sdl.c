@@ -11,6 +11,9 @@ static uint8_t g_keys[256];
 static int32_t g_mdx, g_mdy, g_mdz;
 static uint8_t g_mbtn[8];
 static int g_quit;
+static int g_vulkan;
+void *plat_window(void) { return g_win; }
+int plat_gpu_window(void) { return g_vulkan; }
 static pthread_mutex_t g_in_lock = PTHREAD_MUTEX_INITIALIZER;
 
 int plat_init(void) {
@@ -24,8 +27,16 @@ int plat_init(void) {
   SDL_DisplayMode dm;
   if (SDL_GetCurrentDisplayMode(0, &dm) == 0) { w = dm.w; h = dm.h; }
 #endif
+  /* the GPU renderer (DXVK) presents through Vulkan; the software renderer blits to the window surface */
+  extern int hb_wanted(void);
+  g_vulkan = hb_wanted();
   g_win = SDL_CreateWindow("Fallout: New Vegas (fnv_recomp)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, w, h,
-                           SDL_WINDOW_SHOWN);
+                           SDL_WINDOW_SHOWN | (g_vulkan ? SDL_WINDOW_VULKAN : 0));
+  if (!g_win && g_vulkan) {
+    rt_log("platform: no Vulkan window (%s); falling back to the software renderer", SDL_GetError());
+    g_vulkan = 0;
+    g_win = SDL_CreateWindow("Fallout: New Vegas (fnv_recomp)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, w, h, SDL_WINDOW_SHOWN);
+  }
   if (!g_win) {
     rt_log("platform: SDL_CreateWindow failed (%s); running headless", SDL_GetError());
     return 0;
@@ -35,7 +46,7 @@ int plat_init(void) {
 }
 
 void plat_present(const uint32_t *bgra, int w, int h, int pitch) {
-  if (!g_win) return;
+  if (!g_win || g_vulkan) return;
   SDL_Surface *dst = SDL_GetWindowSurface(g_win);
   if (!dst) return;
   SDL_Surface *src = SDL_CreateRGBSurfaceWithFormatFrom((void *)bgra, w, h, 32, pitch, SDL_PIXELFORMAT_ARGB8888);

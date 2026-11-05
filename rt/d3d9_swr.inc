@@ -253,6 +253,7 @@ static void level_for_surface(Obj *s, Level *L) {
 }
 static void invalidate_cache(Obj *o) {
   if (!o) return;
+  for (int f = 0; f < 6; f++) o->dirty[f] = 0xffffffffu; /* GPU backend: re-upload */
   for (int f = 0; f < 6; f++) for (int l = 0; l < MAXLVL; l++) if (o->cache[f][l]) { free(o->cache[f][l]); o->cache[f][l] = NULL; }
 }
 

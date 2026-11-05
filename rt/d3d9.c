@@ -21,21 +21,7 @@
 static float asf(u32 v) { float f; memcpy(&f, &v, 4); return f; }
 
 /* ---- objects --------------------------------------------------------------- */
-enum { K_D3D, K_DEVICE, K_SURFACE, K_TEXTURE, K_CUBE, K_VOLUME, K_VB, K_IB, K_VS, K_PS, K_DECL, K_QUERY, K_SB, K_SWAP };
-#define MAXLVL 16
-typedef struct Obj {
-  int kind;
-  u32 guest;
-  u32 fmt, w, h, d, levels, usage, pool, size, fvf, type;
-  u32 data[6][MAXLVL];   /* guest storage per face/level (textures), [0][0] for buffers/surfaces */
-  u32 pitch[MAXLVL];
-  u32 sub[6][MAXLVL];    /* child surface objects */
-  u32 parent;            /* surface -> owning texture object (guest), or 0 */
-  int face, level;
-  u32 blob, blob_size;   /* shader bytecode / declaration */
-  void *sh;              /* decoded shader (software renderer) */
-  u32 *cache[6][MAXLVL]; /* decoded DXT levels (software renderer) */
-} Obj;
+#include "d3d9_internal.h"
 static void invalidate_cache(struct Obj *o);
 
 #define MAXOBJ (1 << 20)
@@ -62,7 +48,9 @@ static Obj *obj(u32 g) {
   return id < MAXOBJ ? g_obj[id] : NULL;
 }
 
+Obj *d3d_obj(u32 g) { return obj(g); }
 static void free_storage(Obj *o) {
+  if (o->host) hb_release(o);
   for (int f = 0; f < 6; f++)
     for (int l = 0; l < MAXLVL; l++) {
       if (o->data[f][l] && !o->parent) heap_free(o->data[f][l]);
@@ -124,7 +112,7 @@ static void be_present(void) {
   be_platform_present();
   g_frames++;
   if (g_frames == 1 || (g_frames % 300) == 0)
-    rt_log("D3D9: frame %llu presented (%llu draw calls, %llu primitives so far; null renderer)",
+    rt_log("D3D9: frame %llu presented (%llu draw calls, %llu primitives so far)",
            (unsigned long long)g_frames, (unsigned long long)g_draws, (unsigned long long)g_prims);
 }
 static void be_draw(u32 prims) { g_draws++; g_prims += prims; }
@@ -204,6 +192,7 @@ static u32 make_texture(int kind, u32 w, u32 h, u32 d, u32 levels, u32 usage, u3
       u32 pitch, sz; level_layout(fmt, lw, lh, &pitch, &sz);
       o->pitch[l] = pitch;
       o->data[f][l] = heap_alloc((sz * ld) ? sz * ld : 4, 0);
+      o->dirty[f] |= 1u << l;
       lw = lw > 1 ? lw / 2 : 1; lh = lh > 1 ? lh / 2 : 1; ld = ld > 1 ? ld / 2 : 1;
     }
   }
@@ -307,7 +296,11 @@ static const ComMethod volume_methods[] = {
 
 /* ---- buffers --------------------------------------------------------------- */
 API(b_Lock) {
-  Obj *o = obj(COM_THIS); u32 off = ARG(1);
+  Obj *o = obj(COM_THIS); u32 off = ARG(1), n = ARG(2);
+  if (off >= o->size) off = 0;
+  u32 end = (n == 0 || off + n > o->size) ? o->size : off + n;
+  if (o->dirty_hi <= o->dirty_lo) { o->dirty_lo = off; o->dirty_hi = end; }
+  else { if (off < o->dirty_lo) o->dirty_lo = off; if (end > o->dirty_hi) o->dirty_hi = end; }
   M32(ARG(3)) = o->data[0][0] + (off < o->size ? off : 0);
   RETURN_STD(5, S_OK);
 }
@@ -389,28 +382,8 @@ static const ComMethod sb_methods[] = {
 };
 
 /* ---- device ---------------------------------------------------------------- */
-typedef struct {
-  u32 pp[14];                 /* D3DPRESENT_PARAMETERS */
-  u32 backbuffer, depth;
-  u32 rt[4], ds;
-  u32 rs[256];
-  u32 tss[8][33];
-  u32 ss[20][14];
-  u32 tex[20];
-  u32 stream[16], stream_off[16], stream_stride[16], stream_freq[16];
-  u32 indices, vs, ps, decl, fvf;
-  u32 viewport[6];
-  u32 scissor[4];
-  float transform[512][16];
-  float vsf[256][4], psf[224][4];
-  s32 vsi[16][4], psi[16][4];
-  u32 vsb[16], psb[16];
-  u32 clip[6][4];
-  u32 material[17], light[8][26], light_on[8];
-  u32 hwnd, behavior;
-  int in_scene;
-} DevState;
 static DevState *D;
+DevState *d3d_dev(void) { return D; }
 #include "d3d9_swr.inc"
 
 static void set_ref(u32 *slot, u32 g) {
@@ -453,6 +426,7 @@ API(d_Reset) {
   make_backbuffers();
   memcpy(HP(ARG(1)), D->pp, 56);
   rt_log("D3D9: Reset %ux%u", D->pp[0], D->pp[1]);
+  if (hb_active()) hb_reset();
   RETURN_STD(2, S_OK);
 }
 API(d_Present) { be_present(); RETURN_STD(5, S_OK); }
@@ -481,6 +455,7 @@ static u32 make_buffer(int kind, u32 len, u32 usage, u32 fmt_or_fvf, u32 pool) {
   o->size = len; o->usage = usage; o->pool = pool;
   if (kind == K_VB) o->fvf = fmt_or_fvf; else o->fmt = fmt_or_fvf;
   o->data[0][0] = heap_alloc(len ? len : 4, 0);
+  o->dirty_lo = 0; o->dirty_hi = len;
   return g;
 }
 API(d_CreateVertexBuffer) { M32(ARG(5)) = make_buffer(K_VB, ARG(1), ARG(2), ARG(3), ARG(4)); RETURN_STD(7, S_OK); }
@@ -507,17 +482,17 @@ API(d_UpdateTexture) {
   }
   RETURN_STD(3, S_OK);
 }
-API(d_GetRenderTargetData) { copy_surface(ARG(1), ARG(2)); RETURN_STD(3, S_OK); }
+API(d_GetRenderTargetData) { if (hb_active()) hb_readback(obj(ARG(1)), obj(ARG(2))); else copy_surface(ARG(1), ARG(2)); RETURN_STD(3, S_OK); }
 API(d_GetFrontBufferData) { RETURN_STD(3, S_OK); }
-API(d_StretchRect) { swr_stretch(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5)); DUMP("StretchRect %08x -> %08x filter %u", ARG(1), ARG(3), ARG(5)); RETURN_STD(6, S_OK); }
-API(d_ColorFill) { swr_colorfill(ARG(1), ARG(2), ARG(3)); RETURN_STD(4, S_OK); }
+API(d_StretchRect) { if (hb_active()) hb_stretch(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5)); else swr_stretch(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5)); DUMP("StretchRect %08x -> %08x filter %u", ARG(1), ARG(3), ARG(5)); RETURN_STD(6, S_OK); }
+API(d_ColorFill) { if (hb_active()) hb_colorfill(ARG(1), ARG(2), ARG(3)); else swr_colorfill(ARG(1), ARG(2), ARG(3)); RETURN_STD(4, S_OK); }
 API(d_SetRenderTarget) { u32 i = ARG(1); { Obj *o = obj(ARG(2)); DUMP("SetRenderTarget %u = %08x %ux%u fmt %u", i, ARG(2), o ? o->w : 0, o ? o->h : 0, o ? o->fmt : 0); } if (i < 4) set_ref(&D->rt[i], ARG(2)); RETURN_STD(3, S_OK); }
 API(d_GetRenderTarget) { u32 i = ARG(1); if (i >= 4 || !D->rt[i]) { M32(ARG(2)) = 0; RETURN_STD(3, 0x8876086Cu); } get_ref(ARG(2), D->rt[i]); RETURN_STD(3, S_OK); }
 API(d_SetDepthStencilSurface) { set_ref(&D->ds, ARG(1)); RETURN_STD(2, S_OK); }
 API(d_GetDepthStencilSurface) { if (!D->ds) { M32(ARG(1)) = 0; RETURN_STD(2, 0x8876086Cu); } get_ref(ARG(1), D->ds); RETURN_STD(2, S_OK); }
 API(d_BeginScene) { D->in_scene = 1; RETURN_STD(1, S_OK); }
 API(d_EndScene) { D->in_scene = 0; RETURN_STD(1, S_OK); }
-API(d_Clear) { swr_clear(ARG(1), ARG(2), ARG(3), ARG(4), asf(ARG(5))); DUMP("Clear n=%u flags=%x color=%08x", ARG(1), ARG(3), ARG(4)); RETURN_STD(7, S_OK); }
+API(d_Clear) { if (hb_active()) hb_clear(ARG(1), ARG(2), ARG(3), ARG(4), asf(ARG(5)), ARG(6)); else swr_clear(ARG(1), ARG(2), ARG(3), ARG(4), asf(ARG(5))); DUMP("Clear n=%u flags=%x color=%08x", ARG(1), ARG(3), ARG(4)); RETURN_STD(7, S_OK); }
 API(d_SetTransform) { u32 t = ARG(1); if (t < 512) memcpy(D->transform[t], HP(ARG(2)), 64); RETURN_STD(3, S_OK); }
 API(d_GetTransform) { u32 t = ARG(1); if (t < 512) memcpy(HP(ARG(2)), D->transform[t], 64); RETURN_STD(3, S_OK); }
 API(d_MultiplyTransform) { RETURN_STD(3, S_OK); }
@@ -531,7 +506,7 @@ API(d_LightEnable) { u32 i = ARG(1); if (i < 8) D->light_on[i] = ARG(2); RETURN_
 API(d_GetLightEnable) { u32 i = ARG(1); M32(ARG(2)) = i < 8 ? D->light_on[i] : 0; RETURN_STD(3, S_OK); }
 API(d_SetClipPlane) { u32 i = ARG(1); if (i < 6) memcpy(D->clip[i], HP(ARG(2)), 16); RETURN_STD(3, S_OK); }
 API(d_GetClipPlane) { u32 i = ARG(1); if (i < 6) memcpy(HP(ARG(2)), D->clip[i], 16); RETURN_STD(3, S_OK); }
-API(d_SetRenderState) { u32 s = ARG(1); if (s < 256) D->rs[s] = ARG(2); RETURN_STD(3, S_OK); }
+API(d_SetRenderState) { u32 s = ARG(1); if (s < 256) { D->rs[s] = ARG(2); D->rs_set[s] = 1; } RETURN_STD(3, S_OK); }
 API(d_GetRenderState) { u32 s = ARG(1); M32(ARG(2)) = s < 256 ? D->rs[s] : 0; RETURN_STD(3, S_OK); }
 API(d_CreateStateBlock) { M32(ARG(2)) = new_obj(g_vt_sb, K_SB, NULL); RETURN_STD(3, S_OK); }
 API(d_BeginStateBlock) { RETURN_STD(1, S_OK); }
@@ -542,9 +517,9 @@ static u32 sampler_index(u32 s) { return s >= 257 ? 16 + (s - 257) : s; } /* D3D
 API(d_GetTexture) { u32 s = sampler_index(ARG(1)); get_ref(ARG(2), s < 20 ? D->tex[s] : 0); RETURN_STD(3, S_OK); }
 API(d_SetTexture) { u32 s = sampler_index(ARG(1)); if (s < 20) set_ref(&D->tex[s], ARG(2)); RETURN_STD(3, S_OK); }
 API(d_GetTextureStageState) { u32 s = ARG(1), t = ARG(2); M32(ARG(3)) = (s < 8 && t < 33) ? D->tss[s][t] : 0; RETURN_STD(4, S_OK); }
-API(d_SetTextureStageState) { u32 s = ARG(1), t = ARG(2); if (s < 8 && t < 33) D->tss[s][t] = ARG(3); RETURN_STD(4, S_OK); }
+API(d_SetTextureStageState) { u32 s = ARG(1), t = ARG(2); if (s < 8 && t < 33) { D->tss[s][t] = ARG(3); D->tss_set[s][t] = 1; } RETURN_STD(4, S_OK); }
 API(d_GetSamplerState) { u32 s = sampler_index(ARG(1)), t = ARG(2); M32(ARG(3)) = (s < 20 && t < 14) ? D->ss[s][t] : 0; RETURN_STD(4, S_OK); }
-API(d_SetSamplerState) { u32 s = sampler_index(ARG(1)), t = ARG(2); if (s < 20 && t < 14) D->ss[s][t] = ARG(3); RETURN_STD(4, S_OK); }
+API(d_SetSamplerState) { u32 s = sampler_index(ARG(1)), t = ARG(2); if (s < 20 && t < 14) { D->ss[s][t] = ARG(3); D->ss_set[s][t] = 1; } RETURN_STD(4, S_OK); }
 API(d_ValidateDevice) { if (ARG(1)) M32(ARG(1)) = 1; RETURN_STD(2, S_OK); }
 API(d_GetCurrentTexturePalette) { M32(ARG(1)) = 0; RETURN_STD(2, S_OK); }
 API(d_SetScissorRect) { memcpy(D->scissor, HP(ARG(1)), 16); RETURN_STD(2, S_OK); }
@@ -554,10 +529,10 @@ API(d_GetNPatchMode) { c->st[(c->top - 1) & 7] = 0; c->top = (c->top - 1) & 7; R
 static u32 prim_vertices(u32 type, u32 n) {
   switch (type) { case 1: return n; case 2: return n * 2; case 3: return n + 1; case 4: return n * 3; default: return n + 2; }
 }
-API(d_DrawPrimitive) { dump_draw("DrawPrimitive", ARG(1), ARG(3)); swr_draw(ARG(1), 0, 0, 0, ARG(2), ARG(3), 0, 0, 0, 0); be_draw(ARG(3)); RETURN_STD(4, S_OK); }
-API(d_DrawIndexedPrimitive) { dump_draw("DrawIndexedPrimitive", ARG(1), ARG(6)); swr_draw(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6), 0, 0, 0, 0); be_draw(ARG(6)); RETURN_STD(7, S_OK); }
-API(d_DrawPrimitiveUP) { (void)prim_vertices; dump_draw("DrawPrimitiveUP", ARG(1), ARG(2)); swr_draw(ARG(1), 0, 0, 0, 0, ARG(2), 0, 0, ARG(3), ARG(4)); be_draw(ARG(2)); D->stream[0] = 0; RETURN_STD(5, S_OK); }
-API(d_DrawIndexedPrimitiveUP) { dump_draw("DrawIndexedPrimitiveUP", ARG(1), ARG(4)); swr_draw(ARG(1), 0, ARG(2), ARG(3), 0, ARG(4), ARG(5), ARG(6), ARG(7), ARG(8)); be_draw(ARG(4)); D->stream[0] = 0; D->indices = 0; RETURN_STD(9, S_OK); }
+API(d_DrawPrimitive) { dump_draw("DrawPrimitive", ARG(1), ARG(3)); if (hb_active()) hb_draw(ARG(1), 0, 0, 0, ARG(2), ARG(3), 0, 0, 0, 0, 0); else swr_draw(ARG(1), 0, 0, 0, ARG(2), ARG(3), 0, 0, 0, 0); be_draw(ARG(3)); RETURN_STD(4, S_OK); }
+API(d_DrawIndexedPrimitive) { dump_draw("DrawIndexedPrimitive", ARG(1), ARG(6)); if (hb_active()) hb_draw(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6), 0, 0, 0, 0, 1); else swr_draw(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6), 0, 0, 0, 0); be_draw(ARG(6)); RETURN_STD(7, S_OK); }
+API(d_DrawPrimitiveUP) { (void)prim_vertices; dump_draw("DrawPrimitiveUP", ARG(1), ARG(2)); if (hb_active()) hb_draw(ARG(1), 0, 0, 0, 0, ARG(2), 0, 0, ARG(3), ARG(4), 0); else swr_draw(ARG(1), 0, 0, 0, 0, ARG(2), 0, 0, ARG(3), ARG(4)); be_draw(ARG(2)); D->stream[0] = 0; RETURN_STD(5, S_OK); }
+API(d_DrawIndexedPrimitiveUP) { dump_draw("DrawIndexedPrimitiveUP", ARG(1), ARG(4)); if (hb_active()) hb_draw(ARG(1), 0, ARG(2), ARG(3), 0, ARG(4), ARG(5), ARG(6), ARG(7), ARG(8), 1); else swr_draw(ARG(1), 0, ARG(2), ARG(3), 0, ARG(4), ARG(5), ARG(6), ARG(7), ARG(8)); be_draw(ARG(4)); D->stream[0] = 0; D->indices = 0; RETURN_STD(9, S_OK); }
 API(d_CreateVertexDeclaration) {
   u32 p = ARG(1), n = 0;
   while (M8(p + 8 * n) != 0xff && n < 64) n++;
@@ -771,6 +746,7 @@ API(i_CreateDevice) {
   g_device = new_obj(vt, K_DEVICE, NULL);
   g_swap = new_obj(g_vt_swap, K_SWAP, NULL);
   M32(ARG(6)) = g_device;
+  hb_create_device(); /* GPU backend, when available */
   rt_log("D3D9: CreateDevice %ux%u fmt=%u depth=%u windowed=%u behavior=%x -> %08x", D->pp[0], D->pp[1], D->pp[2],
          D->pp[10], D->pp[8], D->behavior, g_device);
   RETURN_STD(7, S_OK);
@@ -791,6 +767,7 @@ static const ComMethod d3d_methods[] = {
 
 #include "platform.h"
 static void be_platform_present(void) {
+  if (hb_active()) { hb_present(); return; }
   if (!g_render_on || !D) return;
   Obj *bb = obj(D->backbuffer);
   if (bb && (bb->fmt == 21 || bb->fmt == 22)) plat_present((const uint32_t *)HP(bb->data[0][0]), bb->w, bb->h, bb->pitch[0]);
@@ -806,6 +783,7 @@ static void be_present_shot(void) {
     char p[256]; mkdir("shots", 0755);
     snprintf(p, sizeof p, "shots/frame_%06llu.png", (unsigned long long)g_frames + 1);
     Obj *bb = obj(D->backbuffer);
+    if (bb && hb_active()) hb_readback(bb, NULL);
     if (bb) { write_png(p, bb); rt_log("swr: wrote %s (%llu pixels shaded so far)", p, (unsigned long long)g_swr_pixels); }
   }
   /* next frame: render it if every frame renders, or if it will be captured */
@@ -982,3 +960,6 @@ static const ApiEntry xlist[] = {
   {"d3dx9_38.dll", "D3DXSaveTextureToFileA", x_SaveTextureToFileA},
   {0}};
 void d3d9_tex_init(void) { api_register(xlist); }
+
+int d3d_is_dxt(u32 f) { return is_dxt(f); }
+void d3d_level_layout(u32 f, u32 w, u32 h, u32 *pitch, u32 *size) { level_layout(f, w, h, pitch, size); }

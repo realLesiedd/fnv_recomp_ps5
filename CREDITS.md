@@ -34,7 +34,7 @@ fnv_recomp stands on the work of these projects and people. Thank you.
 ## Libraries and tools
 - **[Capstone](https://www.capstone-engine.org/)** (x86 disassembly in the recompiler), **[pefile](https://github.com/erocarrera/pefile)**.
 - **[SDL2](https://libsdl.org)** (Sam Lantinga and contributors).
-- **[DXVK](https://github.com/doitsujin/dxvk)** (Philip Rebohle and contributors): Direct3D 9 on Vulkan, planned for the GPU renderer.
+- **[DXVK](https://github.com/doitsujin/dxvk)** (Philip Rebohle and contributors, zlib license): Direct3D 9 on Vulkan, the GPU renderer (`rt/hostd3d9.cpp` drives its native d3d9 build).
 - **[SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD)** for downloading the player's own copy.
 
 Each project keeps its own license. Code taken or adapted from another project carries that project's notice where

@@ -5,6 +5,8 @@
 #include <stdint.h>
 
 int plat_init(void);                                  /* 0 = headless */
+void *plat_window(void);                              /* SDL_Window* (NULL when headless) */
+int plat_gpu_window(void);                            /* window was created for Vulkan (GPU renderer) */
 void plat_present(const uint32_t *bgra, int w, int h, int pitch_bytes);
 void plat_pump(void);                                 /* main thread: poll events */
 int plat_quit_requested(void);

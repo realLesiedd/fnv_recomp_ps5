@@ -72,3 +72,18 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   this session.
 - Untested on hardware: everything PS5-side. The direct-memory calls use the signatures PS5 homebrew projects
   use; check `/data/fnv_recomp/fnv.log` on the console.
+
+## GPU renderer (DXVK): working on Linux
+
+- `rt/hostd3d9.cpp` replays the D3D9 front end's draws on a DXVK device (Direct3D 9 on Vulkan).
+  - Resources upload when the game has locked them.
+  - State syncs only where it changed.
+  - Shaders pass straight through.
+  - Render targets live on the GPU and are read back on request.
+- Tested with Mesa's lavapipe (software Vulkan) under Xvfb. The main menu renders correctly at about 60 fps (on a
+  software Vulkan driver).
+- Build: `cmake -DFNV_DXVK_DIR=<dxvk native prefix>`. `FNV_RENDERER=software` forces the CPU renderer.
+- Next for PS5:
+  1. Build DXVK with the PS5 toolchain against RADV (PS5_Mesa).
+  2. Give it a window through `VK_KHR_display`.
+  3. Package as a home-screen app like ps5-plume-triangle.
