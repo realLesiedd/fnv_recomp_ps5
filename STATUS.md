@@ -91,6 +91,12 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
    gta4-ps5 port does, driven by the game's achievement unlocks.
 5. **Full DualSense support:** PlayStation-style button prompts (original glyphs, not Sony's assets), haptics,
    adaptive triggers and the light bar where they fit.
+6. **Mods in their own folder:** `mods/<ModName>/` next to `game/` on the console, laid over `Data\` by the
+   runtime's file layer so the game files stay untouched. Plugins.txt and archive invalidation are generated from the
+   enabled mods; an in-game setting turns mods on or off (applies after a restart), and holding a button at start-up
+   launches without mods in case one breaks the game.
+7. **NVSE:** rebuild the open-source xNVSE into the port, with its code patches done as recompiler/runtime hooks,
+   then open-source plugins (such as JIP LN) the same way. Closed-source plugins can't be supported.
 
 ## GPU renderer (DXVK): working on Linux
 
