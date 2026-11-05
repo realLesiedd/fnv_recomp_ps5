@@ -5,6 +5,8 @@
 
 void o_007CBAF0(Ctx *restrict c);
 void o_007CFD20(Ctx *restrict c);
+void o_00789820(Ctx *restrict c);
+void o_0078D080(Ctx *restrict c);
 
 /* Same test the start menu itself makes: any *.fos in the save folder. */
 static int saves_exist(void) {
@@ -54,4 +56,19 @@ void h_007CFD20(Ctx *restrict c) {
   o_007CFD20(c);
   M32(self + 0x1C4) = cont;
   M32(self + 0x1C0) = load;
+}
+
+/* Quitting: the loading-screen thread (0x78D490) wakes from its semaphore and calls LoadingMenu::Update on the
+ * menu singleton (0x11DA0C0), then UpdateLoadingMenuState, before checking its exit flag. When the game quits it
+ * destroys the menu and wakes the thread, which then reads null+0x5BC: the original game's crash on exit, which
+ * on Windows usually goes unseen because the process is already being torn down. Skip both calls when there is
+ * no menu; the thread then sees its exit flag and ends normally. */
+#define LOADING_MENU 0x11DA0C0u
+void h_00789820(Ctx *restrict c) { /* thiscall, no stack arguments */
+  if (!c->r[1]) { c->r[4] += 4; return; }
+  o_00789820(c);
+}
+void h_0078D080(Ctx *restrict c) { /* no arguments; only the loading-screen thread's call (returns to 0x78D55C) */
+  if (M32(c->r[4]) == 0x78D55Cu && !M32(LOADING_MENU)) { c->r[4] += 4; return; }
+  o_0078D080(c);
 }
