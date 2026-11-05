@@ -133,6 +133,17 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
     screenshots late.
   - Seen once locally: a guest null read in the script runner (RunScript 0x5E0D20) just after loading the Primm
     save. Four other loads of the same save did not hit it, so it looks like a timing race in the game.
+- **v21, main thread speed:**
+  - **Waits.** Every Win32 wait (events, semaphores, threads) used one shared condition variable, so each
+    SetEvent or ReleaseSemaphore woke every waiting game thread. Worker threads spent a fifth of their time in
+    kernel wake-ups, and the main thread waited on them. Each waiting thread now has its own condition variable,
+    linked into the objects it waits on, and only those wake. Measured CPU-only (no rendering) at Goodsprings,
+    VeryHigh: 52-63 fps became 89-97 fps, and process CPU fell from about 200% to 145%.
+  - **Indirect calls** use a 6 MB table indexed by address / 16 (85% of functions start on a 16-byte boundary)
+    plus a small hash table, instead of a per-thread cache that fell back to a binary search.
+  - Loading, saving, menus and sound were checked with these changes.
+  - Button prompts: the overlay now writes Data\ArchiveInvalidation.txt (the game's own list of archive files to
+    take loose), but the save menu still shows the Xbox glyphs. Not solved yet.
 - **To watch:** stutters in game; frame rate outdoors at the longer draw distances; dust and smoke clouds
   (player video: heavy orange sheets with hard edges, cause not found yet). The old "all threads 100%" figure came from a
   process clock that is not meaningful on PS5; v14 uses getrusage plus per-thread clocks.

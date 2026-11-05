@@ -23,7 +23,7 @@
 #include <ucontext.h>
 #endif
 
-#define FNV_RELEASE "v20" /* printed at the top of the log so a log shows which build produced it */
+#define FNV_RELEASE "v21" /* printed at the top of the log so a log shows which build produced it */
 
 int g_trace;
 u32 g_peb;
@@ -147,8 +147,43 @@ GuestFn rt_find_guest(u32 a) {
   return NULL;
 }
 
-#define DCACHE 4096
-static __thread struct { u32 a; GuestFn f; } g_dcache[DCACHE]; /* per thread: no torn reads */
+/* Indirect calls (virtual calls, function pointers) find their target here: most functions start on a 16-byte
+   boundary and sit in a table indexed by address / 16 (6 MB, one load); the rest are in a small hash table. Both
+   are filled once at start-up and only read afterwards. (A per-thread cache of 4096 entries missed often enough
+   to make the old dispatcher the largest single item in the main thread's profile.) */
+static GuestFn *g_fn16;
+static u32 g_fn16_base, g_fn16_n;
+static struct { u32 a; GuestFn f; } *g_fnh;
+static u32 g_fnh_mask;
+static void dispatch_init(void) {
+  if (!g_func_count) return;
+  g_fn16_base = g_func_addr[0] & ~15u;
+  g_fn16_n = ((g_func_addr[g_func_count - 1] - g_fn16_base) >> 4) + 1;
+  g_fn16 = calloc(g_fn16_n, sizeof *g_fn16);
+  u32 odd = 0;
+  for (u32 i = 0; i < g_func_count; i++) odd += (g_func_addr[i] & 15) != 0;
+  u32 size = 64;
+  while (size < 2 * odd) size *= 2;
+  g_fnh = calloc(size, sizeof *g_fnh);
+  g_fnh_mask = size - 1;
+  for (u32 i = 0; i < g_func_count; i++) {
+    u32 a = g_func_addr[i];
+    if (!(a & 15)) { g_fn16[(a - g_fn16_base) >> 4] = g_func_ptr[i]; continue; }
+    u32 h = (a * 2654435761u) & g_fnh_mask;
+    while (g_fnh[h].a) h = (h + 1) & g_fnh_mask;
+    g_fnh[h].a = a; g_fnh[h].f = g_func_ptr[i];
+  }
+}
+static inline GuestFn find_fast(u32 t) {
+  if (!(t & 15)) {
+    u32 i = (t - g_fn16_base) >> 4;
+    return i < g_fn16_n ? g_fn16[i] : NULL;
+  }
+  for (u32 h = (t * 2654435761u) & g_fnh_mask;; h = (h + 1) & g_fnh_mask) {
+    if (g_fnh[h].a == t) return g_fnh[h].f;
+    if (!g_fnh[h].a) return NULL;
+  }
+}
 
 void rt_call_ind(Ctx *restrict c, u32 t) {
   if (t >= THUNK_BASE) {
@@ -170,14 +205,8 @@ void rt_call_ind(Ctx *restrict c, u32 t) {
       return;
     }
   }
-  u32 h = (t >> 2) & (DCACHE - 1);
-  GuestFn f;
-  if (g_dcache[h].a == t && g_dcache[h].f) f = g_dcache[h].f;
-  else {
-    f = rt_find_guest(t);
-    if (!f) rt_fatal(c, "call/jump to %08x: no recompiled code there (return address %08x)", t, M32(c->r[4]));
-    g_dcache[h].a = t; g_dcache[h].f = f;
-  }
+  GuestFn f = g_fn16 ? find_fast(t) : rt_find_guest(t);
+  if (__builtin_expect(!f, 0)) rt_fatal(c, "call/jump to %08x: no recompiled code there (return address %08x)", t, M32(c->r[4]));
   f(c);
 }
 
@@ -650,6 +679,7 @@ int main(int argc, char **argv) {
   sigaction(SIGILL, &sa, NULL);
 
   rt_heartbeat_start();
+  dispatch_init();
   overlay_init(); /* the app's assets over the game folder (button prompts) */
   { extern void rt_first_run(void); rt_first_run(); }
   mem_init();

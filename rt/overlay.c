@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <strings.h>
 
 typedef struct {
   char *rel;    /* lower case, '/' separated, relative to the game folder: "data/textures/interface" */
@@ -142,6 +143,45 @@ static void extract_assets(const char *dir) {
   if (written) rt_log("overlay: wrote %d built-in assets to %s", written, dir);
 }
 
+/* The game only takes a loose file over its archive copy when the archive entry is invalidated: at start-up it
+   reads Data\ArchiveInvalidation.txt (SInvalidationFile), where a bare file name (no backslash) invalidates that
+   file in every archive folder that also exists as a loose folder (ClearMatchedEntries, 0xAFAD00; the list is
+   read by 0xAF5AB0, one name per CRLF line). Our list: the game's own file, if any, plus every overlay file name. */
+static void collect_names(const char *host, FILE *out) {
+  DIR *d = opendir(host);
+  if (!d) return;
+  struct dirent *de;
+  while ((de = readdir(d))) {
+    if (de->d_name[0] == '.') continue;
+    char h[2048];
+    snprintf(h, sizeof h, "%s/%s", host, de->d_name);
+    struct stat st;
+    if (stat(h, &st)) continue;
+    if (S_ISDIR(st.st_mode)) collect_names(h, out);
+    else if (strcasecmp(de->d_name, "ArchiveInvalidation.txt")) fprintf(out, "%s\r\n", de->d_name);
+  }
+  closedir(d);
+}
+static void write_invalidation(const char *root) {
+  char path[2048], data[2048], game[2048];
+  snprintf(data, sizeof data, "%s/Data", root);
+  if (access(data, F_OK)) return;
+  snprintf(path, sizeof path, "%s/ArchiveInvalidation.txt", data);
+  FILE *out = fopen(path, "wb");
+  if (!out) return;
+  if (!fs_host_path("Data\\ArchiveInvalidation.txt", game, sizeof game) && strncmp(game, root, strlen(root))) {
+    FILE *in = fopen(game, "rb"); /* the game folder's own list (mods), kept */
+    if (in) {
+      char buf[4096]; size_t n;
+      while ((n = fread(buf, 1, sizeof buf, in)) > 0) fwrite(buf, 1, n, out);
+      fclose(in);
+      fputs("\r\n", out);
+    }
+  }
+  collect_names(data, out);
+  fclose(out);
+}
+
 void overlay_init(void) {
   g_ov_time = time(NULL);
   const char *dir = getenv("FNV_ASSETS_DIR"); /* a folder to use instead of the built-in assets (testing) */
@@ -151,7 +191,10 @@ void overlay_init(void) {
     extract_assets(buf);
     dir = buf;
   }
-  if (dir && access(dir, F_OK) == 0) overlay_add(dir);
+  if (dir && access(dir, F_OK) == 0) {
+    write_invalidation(dir);
+    overlay_add(dir);
+  }
 }
 
 /* host path of the overlay file or folder at rel (lower case, '/' separated), or NULL */

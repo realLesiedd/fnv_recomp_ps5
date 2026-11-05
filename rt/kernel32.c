@@ -405,6 +405,24 @@ API(k_GetModuleFileNameA) {
 }
 
 /* ---- sync objects ---------------------------------------------------------- */
+/* Each waiting thread has its own condition variable, linked into the waiter list of every object it waits on;
+   signalling an object wakes only those threads. (One shared condition variable used to wake every waiting thread
+   of the game on every SetEvent and ReleaseSemaphore: worker threads spent a fifth of their time being woken for
+   nothing.) Everything here runs under g_wait_lock. */
+typedef struct WaitLink { pthread_cond_t *cv; struct WaitLink *next, *prev; HObj *o; } WaitLink;
+static void wake_waiters(HObj *o) {
+  if (!o) return;
+  for (WaitLink *l = o->waiters; l; l = l->next) pthread_cond_signal(l->cv);
+}
+static void link_waiter(WaitLink *l, HObj *o, pthread_cond_t *cv) {
+  l->cv = cv; l->o = o; l->prev = NULL; l->next = o->waiters;
+  if (l->next) l->next->prev = l;
+  o->waiters = l;
+}
+static void unlink_waiter(WaitLink *l) {
+  if (l->prev) l->prev->next = l->next; else l->o->waiters = l->next;
+  if (l->next) l->next->prev = l->prev;
+}
 API(k_CreateEventA) {
   u32 h = h_new(H_EVENT); HObj *o = h_get(h);
   o->manual = ARG(1); o->signaled = ARG(2);
@@ -412,13 +430,13 @@ API(k_CreateEventA) {
 }
 API(k_SetEvent) {
   HObj *o = h_get(ARG(0));
-  pthread_mutex_lock(&g_wait_lock); if (o) o->signaled = 1; sync_signal_all(); pthread_mutex_unlock(&g_wait_lock);
+  pthread_mutex_lock(&g_wait_lock); if (o) { o->signaled = 1; wake_waiters(o); } pthread_mutex_unlock(&g_wait_lock);
   RETURN_STD(1, o != NULL);
 }
 /* SetEvent for host code (DirectSound position notifications) */
 void rt_event_set(u32 h) {
   HObj *o = h_get(h);
-  pthread_mutex_lock(&g_wait_lock); if (o && o->type == H_EVENT) o->signaled = 1; sync_signal_all(); pthread_mutex_unlock(&g_wait_lock);
+  pthread_mutex_lock(&g_wait_lock); if (o && o->type == H_EVENT) { o->signaled = 1; wake_waiters(o); } pthread_mutex_unlock(&g_wait_lock);
 }
 API(k_ResetEvent) {
   HObj *o = h_get(ARG(0));
@@ -437,7 +455,7 @@ API(k_ReleaseSemaphore) {
   if (ARG(2)) M32(ARG(2)) = o->count;
   o->count += ARG(1);
   if (o->max && o->count > o->max) o->count = o->max;
-  sync_signal_all();
+  wake_waiters(o);
   pthread_mutex_unlock(&g_wait_lock);
   RETURN_STD(3, 1);
 }
@@ -467,12 +485,19 @@ static int is_ready(HObj *o) {
   }
 }
 static u32 wait_objects(Ctx *c, int n, const u32 *hs, int all, u32 ms) {
+  static __thread pthread_cond_t cv;
+  static __thread int cv_ready;
+  if (!cv_ready) { pthread_cond_init(&cv, NULL); cv_ready = 1; }
   struct timespec dl;
   clock_gettime(CLOCK_REALTIME, &dl);
   if (ms != 0xffffffff) {
     dl.tv_sec += ms / 1000; dl.tv_nsec += (ms % 1000) * 1000000L;
     if (dl.tv_nsec >= 1000000000L) { dl.tv_sec++; dl.tv_nsec -= 1000000000L; }
   }
+  if (n > 64) n = 64;
+  WaitLink links[64];
+  int nlinks = 0;
+  u32 result = 0x102; /* WAIT_TIMEOUT */
   pthread_mutex_lock(&g_wait_lock);
   for (;;) {
     if (all) {
@@ -480,25 +505,28 @@ static u32 wait_objects(Ctx *c, int n, const u32 *hs, int all, u32 ms) {
       for (int i = 0; i < n; i++) { HObj *o = h_get(hs[i]); if (o && !is_ready(o)) ok = 0; }
       if (ok) {
         for (int i = 0; i < n; i++) { HObj *o = h_get(hs[i]); if (o) try_acquire(o); }
-        pthread_mutex_unlock(&g_wait_lock);
-        return 0;
+        result = 0;
+        break;
       }
     } else {
-      for (int i = 0; i < n; i++) {
+      int got = -1;
+      for (int i = 0; i < n && got < 0; i++) {
         HObj *o = h_get(hs[i]);
-        if (!o) { pthread_mutex_unlock(&g_wait_lock); rt_set_error(c, 6); return 0xffffffff; }
-        if (try_acquire(o)) { pthread_mutex_unlock(&g_wait_lock); return i; }
+        if (!o) { got = -2; break; }
+        if (try_acquire(o)) got = i;
       }
+      if (got == -2) { rt_set_error(c, 6); result = 0xffffffff; break; }
+      if (got >= 0) { result = (u32)got; break; }
     }
     if (ms == 0) break;
-    if (ms == 0xffffffff) pthread_cond_wait(&g_wait_cond, &g_wait_lock);
-    else if (pthread_cond_timedwait(&g_wait_cond, &g_wait_lock, &dl) == ETIMEDOUT) {
-      /* one last check */
-      ms = 0;
-    }
+    if (!nlinks) /* from now on a signal on any of these objects wakes this thread */
+      for (int i = 0; i < n; i++) { HObj *o = h_get(hs[i]); if (o) link_waiter(&links[nlinks++], o, &cv); }
+    if (ms == 0xffffffff) pthread_cond_wait(&cv, &g_wait_lock);
+    else if (pthread_cond_timedwait(&cv, &g_wait_lock, &dl) == ETIMEDOUT) ms = 0; /* one last check */
   }
+  for (int i = 0; i < nlinks; i++) unlink_waiter(&links[i]);
   pthread_mutex_unlock(&g_wait_lock);
-  return 0x102; /* WAIT_TIMEOUT */
+  return result;
 }
 API(k_WaitForSingleObject) { u32 h = ARG(0); RETURN_STD(2, wait_objects(c, 1, &h, 0, ARG(1))); }
 API(k_WaitForMultipleObjects) {
@@ -543,7 +571,7 @@ static void *thread_main(void *p) {
   pthread_mutex_lock(&g_wait_lock);
   ts->o->exit_code = code;
   ts->o->finished = 1;
-  sync_signal_all();
+  wake_waiters(ts->o);
   pthread_mutex_unlock(&g_wait_lock);
   TRACE("thread %d exits (%u)", c->thread_index, code);
   return NULL;

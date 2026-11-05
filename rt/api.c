@@ -54,7 +54,6 @@ void api_init_all(void) {
 static HObj *g_h[MAX_H];
 static pthread_mutex_t g_h_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t g_wait_lock = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t g_wait_cond = PTHREAD_COND_INITIALIZER;
 
 u32 h_new(int type) {
   pthread_mutex_lock(&g_h_lock);
@@ -101,14 +100,14 @@ void h_close(u32 h) {
     free(o->ents);
     free(o->pattern);
     free(o->dirpath);
-    /* thread objects stay alive while the thread runs; it holds its own pointer */
-    if (o->type != H_THREAD || o->finished) free(o);
+    /* thread objects stay alive while the thread runs; it holds its own pointer. An object a thread still waits on
+       stays too (it is unlinked from it when the wait ends) */
+    if ((o->type != H_THREAD || o->finished) && !o->waiters) free(o);
     g_h[i] = NULL;
   }
   pthread_mutex_unlock(&g_h_lock);
 }
 
-void sync_signal_all(void) { pthread_cond_broadcast(&g_wait_cond); }
 
 /* ---- virtual filesystem ---------------------------------------------------- */
 /* C:\Game\...  -> the game folder (FNV_GAME_DIR)
