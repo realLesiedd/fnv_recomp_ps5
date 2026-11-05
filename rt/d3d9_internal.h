@@ -64,6 +64,7 @@ void hb_stretch(u32 src, u32 srect, u32 dst, u32 drect, u32 filter);
 void hb_colorfill(u32 surf, u32 rect, u32 color);
 void hb_present(void);
 void hb_movie_overlay(void);
+void hb_frame_end(double frame_ms, double present_ms, double cpu_ms, int created, int destroyed, double mb_read);
 void hb_readback(Obj *src, Obj *dst); /* host render target -> guest storage of dst (or of src when dst is NULL) */
 void hb_release(Obj *o);
 

@@ -99,6 +99,12 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   leaves out the preset's multisampling. An existing medium file is raised once (marker `[fnv_recomp]
   iSettingsVersion`), so later changes in the game's settings menu stay. Test harness: typed text reaches the
   game as WM_CHAR, and key presses shorter than a frame are latched.
+- **v16 on PS5 (36 min session):** the intro plays (6.2 ms per frame to decode, skipped at 33 s), no crash, clean
+  exit. Memory flat: game RAM 1.0-1.1 GB, video memory 1.9 GB, 331 MB host memory free, about 8,500 of 51,000 D3D
+  objects alive. Mostly 60 fps, but single-frame stalls of up to 1 s with the CPU mostly idle, each with about 150
+  new D3D objects.
+- **v18:** the log reports every frame over 150 ms with a breakdown: draws (pipeline compiles happen there),
+  creating GPU objects, uploads, other device calls, Present and game time, plus objects created/freed and MB read.
 - **To watch:** stutters in game; frame rate outdoors at the longer draw distances; dust and smoke clouds
   (player video: heavy orange sheets with hard edges, cause not found yet). The old "all threads 100%" figure came from a
   process clock that is not meaningful on PS5; v14 uses getrusage plus per-thread clocks.

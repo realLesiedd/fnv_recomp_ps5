@@ -23,6 +23,29 @@ static int g_active = -1;
 static bool g_in_scene;
 static IDirect3DSurface9 *g_host_bb, *g_host_depth;
 
+/* Where a slow frame's time goes (main thread): draws (DXVK compiles pipelines on first use there), creating GPU
+   objects, uploading textures and buffers, other device calls. Cycle counter, cheap enough for every call;
+   reported by hb_frame_end. Nested sections are timed exclusively. */
+#include <x86intrin.h>
+enum { T_DRAW, T_CREATE, T_UPLOAD, T_OTHER, T_N };
+static thread_local uint64_t t_acc[T_N];
+static thread_local unsigned t_cnt[T_N];
+static thread_local int t_stk[8], t_sp;
+static thread_local uint64_t t_mark;
+static inline void prof_push(int cat) {
+  uint64_t t = __rdtsc();
+  if (t_sp) t_acc[t_stk[t_sp - 1]] += t - t_mark;
+  if (t_sp < 8) t_stk[t_sp++] = cat;
+  t_cnt[cat]++;
+  t_mark = t;
+}
+static inline void prof_pop(void) {
+  uint64_t t = __rdtsc();
+  if (t_sp) t_acc[t_stk[--t_sp]] += t - t_mark;
+  t_mark = t;
+}
+struct Prof { Prof(int c) { prof_push(c); } ~Prof() { prof_pop(); } };
+
 extern "C" int hb_wanted(void) {
   const char *r = getenv("FNV_RENDERER");
   if (r && !strcmp(r, "software")) return 0;
@@ -129,6 +152,7 @@ static u32 level_rows(Obj *o, u32 l) {
 }
 
 static void upload_texture(Obj *o) {
+  Prof prof_(T_UPLOAD);
   if (o->usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)) { for (int f = 0; f < 6; f++) o->dirty[f] = 0; return; }
   DWORD lockf = (o->usage & D3DUSAGE_DYNAMIC) ? D3DLOCK_DISCARD : 0;
   if (o->kind == K_TEXTURE) {
@@ -172,6 +196,7 @@ static void upload_texture(Obj *o) {
 static IDirect3DBaseTexture9 *host_texture(Obj *o) {
   if (!o) return NULL;
   if (!o->host) {
+    Prof prof_(T_CREATE);
     HRESULT hr = E_FAIL;
     DWORD usage = o->usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_DYNAMIC | D3DUSAGE_AUTOGENMIPMAP);
     D3DPOOL pool = pool_for(o);
@@ -207,6 +232,7 @@ static IDirect3DSurface9 *host_surface(Obj *s) {
   if (s->guest == D->backbuffer) return g_host_bb;
   if (s->guest == D->depth) return g_host_depth;
   if (!s->host) {
+    Prof prof_(T_CREATE);
     HRESULT hr = E_FAIL;
     IDirect3DSurface9 *surf = NULL;
     if (s->parent) {
@@ -235,6 +261,7 @@ static IDirect3DSurface9 *host_surface(Obj *s) {
 static IDirect3DVertexBuffer9 *host_vb(Obj *o) {
   if (!o) return NULL;
   if (!o->host) {
+    Prof prof_(T_CREATE);
     IDirect3DVertexBuffer9 *b = NULL;
     DWORD usage = (o->usage & (D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY | D3DUSAGE_POINTS));
     if (FAILED(g_dev->CreateVertexBuffer(o->size, usage, 0, (o->usage & D3DUSAGE_DYNAMIC) ? D3DPOOL_DEFAULT : D3DPOOL_MANAGED, &b, NULL))) return NULL;
@@ -242,6 +269,7 @@ static IDirect3DVertexBuffer9 *host_vb(Obj *o) {
   }
   IDirect3DVertexBuffer9 *b = (IDirect3DVertexBuffer9 *)o->host;
   if (o->dirty_hi > o->dirty_lo) {
+    Prof prof_(T_UPLOAD);
     void *p;
     bool whole = o->dirty_lo == 0 && o->dirty_hi >= o->size;
     DWORD f = (o->usage & D3DUSAGE_DYNAMIC) ? (whole ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE) : 0;
@@ -257,6 +285,7 @@ static IDirect3DVertexBuffer9 *host_vb(Obj *o) {
 static IDirect3DIndexBuffer9 *host_ib(Obj *o) {
   if (!o) return NULL;
   if (!o->host) {
+    Prof prof_(T_CREATE);
     IDirect3DIndexBuffer9 *b = NULL;
     DWORD usage = (o->usage & (D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY));
     if (FAILED(g_dev->CreateIndexBuffer(o->size, usage, (D3DFORMAT)o->fmt, (o->usage & D3DUSAGE_DYNAMIC) ? D3DPOOL_DEFAULT : D3DPOOL_MANAGED, &b, NULL))) return NULL;
@@ -264,6 +293,7 @@ static IDirect3DIndexBuffer9 *host_ib(Obj *o) {
   }
   IDirect3DIndexBuffer9 *b = (IDirect3DIndexBuffer9 *)o->host;
   if (o->dirty_hi > o->dirty_lo) {
+    Prof prof_(T_UPLOAD);
     void *p;
     bool whole = o->dirty_lo == 0 && o->dirty_hi >= o->size;
     DWORD f = (o->usage & D3DUSAGE_DYNAMIC) ? (whole ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE) : 0;
@@ -279,6 +309,7 @@ static IDirect3DIndexBuffer9 *host_ib(Obj *o) {
 static IDirect3DVertexShader9 *host_vs(Obj *o) {
   if (!o) return NULL;
   if (!o->host) {
+    Prof prof_(T_CREATE);
     IDirect3DVertexShader9 *s = NULL;
     if (FAILED(g_dev->CreateVertexShader((const DWORD *)HP(o->blob), &s))) { rt_log("GPU backend: vertex shader rejected"); return NULL; }
     o->host = s;
@@ -288,6 +319,7 @@ static IDirect3DVertexShader9 *host_vs(Obj *o) {
 static IDirect3DPixelShader9 *host_ps(Obj *o) {
   if (!o) return NULL;
   if (!o->host) {
+    Prof prof_(T_CREATE);
     IDirect3DPixelShader9 *s = NULL;
     if (FAILED(g_dev->CreatePixelShader((const DWORD *)HP(o->blob), &s))) { rt_log("GPU backend: pixel shader rejected"); return NULL; }
     o->host = s;
@@ -297,6 +329,7 @@ static IDirect3DPixelShader9 *host_ps(Obj *o) {
 static IDirect3DVertexDeclaration9 *host_decl(Obj *o) {
   if (!o) return NULL;
   if (!o->host) {
+    Prof prof_(T_CREATE);
     IDirect3DVertexDeclaration9 *d = NULL;
     if (FAILED(g_dev->CreateVertexDeclaration((const D3DVERTEXELEMENT9 *)HP(o->blob), &d))) return NULL;
     o->host = d;
@@ -422,6 +455,7 @@ static void sync_state(void) {
 /* ---------------------------------------------------------------- drawing */
 extern "C" void hb_draw(u32 type, u32 base, u32 min_index, u32 num_vertices, u32 start, u32 prims, u32 idx_data,
                         u32 idx_fmt, u32 up_data, u32 up_stride, int indexed) {
+  Prof prof_(T_DRAW);
   if (!g_dev || !prims) return;
   sync_state();
   begin_scene();
@@ -440,6 +474,7 @@ extern "C" void hb_draw(u32 type, u32 base, u32 min_index, u32 num_vertices, u32
 }
 
 extern "C" void hb_clear(u32 count, u32 rects, u32 flags, u32 color, float z, u32 stencil) {
+  Prof prof_(T_OTHER);
   if (!g_dev) return;
   sync_state();
   begin_scene();
@@ -456,6 +491,7 @@ static RECT *rect_from(u32 p, RECT *r) {
 }
 
 extern "C" void hb_stretch(u32 src, u32 srect, u32 dst, u32 drect, u32 filter) {
+  Prof prof_(T_OTHER);
   if (!g_dev) return;
   IDirect3DSurface9 *s = host_surface(d3d_obj(src)), *d = host_surface(d3d_obj(dst));
   if (!s || !d) return;
@@ -464,6 +500,7 @@ extern "C" void hb_stretch(u32 src, u32 srect, u32 dst, u32 drect, u32 filter) {
 }
 
 extern "C" void hb_colorfill(u32 surf, u32 rect, u32 color) {
+  Prof prof_(T_OTHER);
   if (!g_dev) return;
   IDirect3DSurface9 *s = host_surface(d3d_obj(surf));
   if (!s) return;
@@ -514,9 +551,38 @@ static void movie_overlay(void) {
 
 /* called before the frame is presented (and before a test screenshot) */
 extern "C" void hb_movie_overlay(void) {
+  Prof prof_(T_OTHER);
   if (!g_dev) return;
   if (g_in_scene) { g_dev->EndScene(); g_in_scene = false; }
   movie_overlay();
+}
+
+/* called after every Present on the main thread: report a slow frame with its breakdown */
+extern "C" void hb_frame_end(double frame_ms, double present_ms, double cpu_ms, int created, int destroyed, double mb_read) {
+  static uint64_t tsc0;
+  static double mono0, tsc_per_ms;
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  double now = ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
+  uint64_t tsc = __rdtsc();
+  if (!tsc0) { tsc0 = tsc; mono0 = now; }
+  else if (now - mono0 > 1000) tsc_per_ms = (double)(tsc - tsc0) / (now - mono0);
+  static int reported;
+  if (frame_ms > 150 && tsc_per_ms > 0 && reported < 200) {
+    reported++;
+    double d = t_acc[T_DRAW] / tsc_per_ms, cr = t_acc[T_CREATE] / tsc_per_ms, up = t_acc[T_UPLOAD] / tsc_per_ms,
+           ot = t_acc[T_OTHER] / tsc_per_ms;
+    double rest = frame_ms - present_ms - d - cr - up - ot;
+    char busy[48] = "";
+    if (cpu_ms >= 0) snprintf(busy, sizeof busy, " (presenting thread busy %.0f ms)", cpu_ms);
+    rt_log("slow frame: %.0f ms%s = draws %.0f ms (%u) + creating GPU objects %.0f ms (%u) + "
+           "uploads %.0f ms (%u) + other device calls %.0f ms + Present %.0f ms + game %.0f ms; D3D objects %d created, "
+           "%d freed; %.1f MB read",
+           frame_ms, busy, d, t_cnt[T_DRAW], cr, t_cnt[T_CREATE], up, t_cnt[T_UPLOAD], ot, present_ms,
+           rest > 0 ? rest : 0, created, destroyed, mb_read);
+  }
+  memset(t_acc, 0, sizeof t_acc);
+  memset(t_cnt, 0, sizeof t_cnt);
 }
 
 extern "C" void hb_present(void) {
@@ -527,6 +593,7 @@ extern "C" void hb_present(void) {
 
 /* copy a GPU render target into the guest storage of dst (or of src) */
 extern "C" void hb_readback(Obj *src, Obj *dst) {
+  Prof prof_(T_OTHER);
   if (!g_dev || !src) return;
   if (!dst) dst = src;
   IDirect3DSurface9 *s = host_surface(src);

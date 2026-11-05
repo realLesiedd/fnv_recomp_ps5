@@ -166,7 +166,23 @@ static void be_present(void) {
   clock_gettime(CLOCK_MONOTONIC, &p0);
   be_platform_present();
   clock_gettime(CLOCK_MONOTONIC, &p1);
-  rt_perf_frame((p1.tv_sec - p0.tv_sec) * 1e3 + (p1.tv_nsec - p0.tv_nsec) / 1e6);
+  double present_ms = (p1.tv_sec - p0.tv_sec) * 1e3 + (p1.tv_nsec - p0.tv_nsec) / 1e6;
+  rt_perf_frame(present_ms);
+  { /* slow-frame breakdown (hostd3d9.cpp) */
+    static double last_ms, last_cpu;
+    static pthread_t last_thr; /* loading screens present from another thread: its CPU clock is not comparable */
+    static int last_created, last_live;
+    static u64 last_read;
+    extern u64 g_stat_read;
+    struct timespec tc;
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &tc);
+    double now = p1.tv_sec * 1e3 + p1.tv_nsec / 1e6, cpu = tc.tv_sec * 1e3 + tc.tv_nsec / 1e6;
+    int created = g_nobj - 1, live = g_d3d_live;
+    if (last_ms > 0 && hb_active())
+      hb_frame_end(now - last_ms, present_ms, pthread_equal(last_thr, pthread_self()) ? cpu - last_cpu : -1, created - last_created,
+                   (created - last_created) - (live - last_live), (g_stat_read - last_read) / 1048576.0);
+    last_ms = now; last_cpu = cpu; last_thr = pthread_self(); last_created = created; last_live = live; last_read = g_stat_read;
+  }
   g_frames++;
   if (g_frames == 1 || (g_frames % 300) == 0)
     rt_log("D3D9: frame %llu presented (%llu draw calls, %llu primitives so far)",
