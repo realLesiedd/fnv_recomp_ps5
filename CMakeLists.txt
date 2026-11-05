@@ -58,6 +58,13 @@ if(PS5)
 endif()
 target_include_directories(fnv PRIVATE rt)
 target_compile_options(fnv PRIVATE -Wall -Wno-unused-function -fno-strict-aliasing -fwrapv $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-variable>)
+# the app's own assets (button prompts), built into the executable
+file(GLOB_RECURSE ASSET_FILES ${CMAKE_SOURCE_DIR}/assets/*)
+add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/assets_data.c
+  COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/embed_assets.py ${CMAKE_SOURCE_DIR}/assets ${CMAKE_BINARY_DIR}/assets_data.c
+  DEPENDS ${ASSET_FILES} ${CMAKE_SOURCE_DIR}/tools/embed_assets.py)
+target_sources(fnv PRIVATE ${CMAKE_BINARY_DIR}/assets_data.c)
+
 # Bink movies: FFmpeg's Bink decoders (libavcodec, LGPL)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavutil)

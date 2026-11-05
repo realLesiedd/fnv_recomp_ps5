@@ -23,7 +23,7 @@
 #include <ucontext.h>
 #endif
 
-#define FNV_RELEASE "v18" /* printed at the top of the log so a log shows which build produced it */
+#define FNV_RELEASE "v19" /* printed at the top of the log so a log shows which build produced it */
 
 int g_trace;
 u32 g_peb;
@@ -650,6 +650,7 @@ int main(int argc, char **argv) {
   sigaction(SIGILL, &sa, NULL);
 
   rt_heartbeat_start();
+  overlay_init(); /* the app's assets over the game folder (button prompts) */
   { extern void rt_first_run(void); rt_first_run(); }
   mem_init();
   map_image(exe);

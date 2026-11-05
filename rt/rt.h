@@ -67,6 +67,7 @@ typedef struct HObj {
   pthread_cond_t resume;
   /* files */
   int fd; void *dir; char *pattern; char *dirpath;
+  void *ents; int nents, pos; /* FindFirstFile: the merged listing (game folder plus overlays) */
   char name[64];
 } HObj;
 u32 h_new(int type);
@@ -80,6 +81,14 @@ void sync_signal_all(void);
 extern char g_game_dir[1024];
 extern char g_user_dir[1024];
 int fs_host_path(const char *winpath, char *out, size_t outsz); /* 0 ok */
+int fs_game_rel(const char *winpath, char *rel, size_t relsz);    /* 1: inside the game folder, rel = lower-case relative path */
+/* overlay folders over the game folder (overlay.c) */
+void overlay_init(void);
+void overlay_add(const char *root);
+const char *overlay_find(const char *rel, int *is_dir);
+void overlay_list(const char *rel, void (*cb)(void *ctx, const char *name, const char *host, int dir), void *ctx);
+time_t overlay_time(void);
+int overlay_active(void);
 const char *fs_game_win_dir(void);
 
 /* registration of API implementations */

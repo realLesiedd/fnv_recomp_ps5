@@ -45,7 +45,12 @@ typedef struct {
   u32 hwnd, behavior;
   int in_scene;
   u8 rs_set[256], ss_set[20][14], tss_set[8][33]; /* which states the game has set (GPU backend sync) */
+  u32 dirty;                     /* GPU backend: kinds of state changed since the last draw (D_*) */
+  u32 vsf_lo, vsf_hi, psf_lo, psf_hi; /* GPU backend: float constant registers changed since the last draw */
 } DevState;
+enum { D_RS = 1, D_SS = 2, D_TSS = 4, D_VSF = 8, D_PSF = 16, D_CONSTIB = 32, D_XFORM = 64, D_VIEW = 128, D_MAT = 256,
+       D_ALL = 0x1FF };
+static inline void dev_dirty_all(DevState *D) { D->dirty = D_ALL; D->vsf_lo = 0; D->vsf_hi = 256; D->psf_lo = 0; D->psf_hi = 224; }
 
 Obj *d3d_obj(u32 guest);
 DevState *d3d_dev(void);

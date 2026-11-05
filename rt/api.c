@@ -85,6 +85,7 @@ void h_close(u32 h) {
     HObj *o = g_h[i];
     if (o->type == H_FILE && o->fd >= 0) close(o->fd);
     if (o->type == H_FIND && o->dir) closedir(o->dir);
+    free(o->ents);
     free(o->pattern);
     free(o->dirpath);
     /* thread objects stay alive while the thread runs; it holds its own pointer */
@@ -131,24 +132,66 @@ static void resolve_case(char *path) {
   strcpy(path, out[0] ? out : "/");
 }
 
-int fs_host_path(const char *w, char *out, size_t n) {
+/* the path relative to the game folder, lower case, '/' separated, without "." parts; 0 if outside it */
+static int game_rel(const char *buf, char *rel, size_t n) {
+  size_t gl = strlen(g_game_dir);
+  if (strncmp(buf, g_game_dir, gl) || (buf[gl] != '/' && buf[gl])) return 0;
+  const char *s = buf + gl;
+  size_t o = 0;
+  while (*s && o + 1 < n) {
+    while (*s == '/') s++;
+    if (s[0] == '.' && (s[1] == '/' || !s[1])) { s++; continue; }
+    if (!*s) break;
+    if (o) rel[o++] = '/';
+    while (*s && *s != '/' && o + 1 < n) rel[o++] = (char)tolower((unsigned char)*s++);
+  }
+  rel[o] = 0;
+  return 1;
+}
+
+static void host_path(const char *w, char *buf, size_t bufsz) {
   char p[2048];
   snprintf(p, sizeof p, "%s", w);
   for (char *q = p; *q; q++) if (*q == '\\') *q = '/';
   const char *rest = p;
-  char buf[2048];
   if (((p[0] | 32) >= 'a' && (p[0] | 32) <= 'z') && p[1] == ':') {
     rest = p + 2;
     if (!strncasecmp(rest, "/Game", 5) && (rest[5] == '/' || !rest[5]))
-      snprintf(buf, sizeof buf, "%s/%s", g_game_dir, rest + 5);
+      snprintf(buf, bufsz, "%s/%s", g_game_dir, rest + 5);
     else if (!strncasecmp(rest, "/Users/Player", 13) && (rest[13] == '/' || !rest[13]))
-      snprintf(buf, sizeof buf, "%s/%s", g_user_dir, rest + 13);
+      snprintf(buf, bufsz, "%s/%s", g_user_dir, rest + 13);
     else
-      snprintf(buf, sizeof buf, "%s/drive_%c/%s", g_user_dir, p[0] | 32, rest);
-  } else if (p[0] == '/') {
-    snprintf(buf, sizeof buf, "%s/%s", g_game_dir, p);
+      snprintf(buf, bufsz, "%s/drive_%c/%s", g_user_dir, p[0] | 32, rest);
   } else {
-    snprintf(buf, sizeof buf, "%s/%s", g_game_dir, p);
+    snprintf(buf, bufsz, "%s/%s", g_game_dir, p);
+  }
+}
+
+int fs_game_rel(const char *w, char *rel, size_t n) {
+  char buf[2048];
+  host_path(w, buf, sizeof buf);
+  return game_rel(buf, rel, n);
+}
+
+int fs_host_path(const char *w, char *out, size_t n) {
+  char buf[2048], rel[2048];
+  host_path(w, buf, sizeof buf);
+  /* an overlay file wins; an overlay folder is used when the game has none by that name (listings merge both) */
+  if (overlay_active() && game_rel(buf, rel, sizeof rel)) {
+    int dir = 0;
+    const char *ov = overlay_find(rel, &dir);
+    if (ov && !dir) {
+      static int logged;
+      if (logged++ < 40) rt_log("overlay: %s -> %s", w, ov);
+      snprintf(out, n, "%s", ov);
+      return 0;
+    }
+    if (ov) {
+      resolve_case(buf);
+      struct stat st;
+      snprintf(out, n, "%s", stat(buf, &st) == 0 ? buf : ov);
+      return 0;
+    }
   }
   resolve_case(buf);
   snprintf(out, n, "%s", buf);

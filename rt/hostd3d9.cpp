@@ -68,7 +68,7 @@ extern "C" int hb_init(void) {
   setenv("DXVK_CONFIG", "dxvk.numCompilerThreads = 8", 0);
   setenv("DXVK_LOG_PATH", "/app0", 0);
   /* performance overlay for now: fps, frame times, GPU load (scaled for a 4K TV) */
-  setenv("DXVK_HUD", "fps,frametimes,gpuload,compiler,scale=2", 0);
+  setenv("DXVK_HUD", "fps,frametimes,gpuload,compiler,scale=4", 0);
 #else
   setenv("DXVK_WSI_DRIVER", "SDL2", 0);
 #endif
@@ -366,6 +366,7 @@ static void shadow_reset(void) {
   if (!S) S = (Shadow *)calloc(1, sizeof(Shadow));
   memset(S, 0xff, sizeof(Shadow)); /* everything "unknown": the first draw sets it all */
   S->valid = 1;
+  if (d3d_dev()) dev_dirty_all(d3d_dev());
 }
 
 static DWORD sampler_stage(int s) { return s < 16 ? (DWORD)s : s == 16 ? D3DDMAPSAMPLER : (DWORD)(D3DVERTEXTEXTURESAMPLER0 + (s - 17)); }
@@ -385,28 +386,35 @@ static void sync_consts(T (*cur)[4], T (*sh)[4], int n, F set) {
 
 static void sync_state(void) {
   DevState *D = d3d_dev();
+  /* only the kinds of state the game changed since the last draw (D->dirty, set by the D3D9 setters) are walked */
   /* render targets first: SetRenderTarget resets the viewport */
+  bool rt_changed = false;
   for (int i = 0; i < 4; i++) {
     IDirect3DSurface9 *s = D->rt[i] ? host_surface(d3d_obj(D->rt[i])) : NULL;
     if (i == 0 && !s) s = g_host_bb;
-    if (s != S->rt[i]) { g_dev->SetRenderTarget(i, s); S->rt[i] = s; }
+    if (s != S->rt[i]) { g_dev->SetRenderTarget(i, s); S->rt[i] = s; rt_changed = true; }
   }
   IDirect3DSurface9 *ds = D->ds ? host_surface(d3d_obj(D->ds)) : NULL;
   if (ds != S->ds) { g_dev->SetDepthStencilSurface(ds); S->ds = ds; }
-  D3DVIEWPORT9 vp;
-  memcpy(&vp, D->viewport, sizeof vp);
-  g_dev->SetViewport(&vp);
-  RECT sc = {(LONG)D->scissor[0], (LONG)D->scissor[1], (LONG)D->scissor[2], (LONG)D->scissor[3]};
-  g_dev->SetScissorRect(&sc);
+  if (rt_changed || (D->dirty & D_VIEW)) {
+    D3DVIEWPORT9 vp;
+    memcpy(&vp, D->viewport, sizeof vp);
+    g_dev->SetViewport(&vp);
+    RECT sc = {(LONG)D->scissor[0], (LONG)D->scissor[1], (LONG)D->scissor[2], (LONG)D->scissor[3]};
+    g_dev->SetScissorRect(&sc);
+  }
 
-  for (int s = 0; s < 256; s++)
-    if (D->rs_set[s] && D->rs[s] != S->rs[s]) { g_dev->SetRenderState((D3DRENDERSTATETYPE)s, D->rs[s]); S->rs[s] = D->rs[s]; }
-  for (int s = 0; s < 20; s++)
-    for (int t = 1; t < 14; t++)
-      if (D->ss_set[s][t] && D->ss[s][t] != S->ss[s][t]) { g_dev->SetSamplerState(sampler_stage(s), (D3DSAMPLERSTATETYPE)t, D->ss[s][t]); S->ss[s][t] = D->ss[s][t]; }
-  for (int s = 0; s < 8; s++)
-    for (int t = 1; t < 33; t++)
-      if (D->tss_set[s][t] && D->tss[s][t] != S->tss[s][t]) { g_dev->SetTextureStageState(s, (D3DTEXTURESTAGESTATETYPE)t, D->tss[s][t]); S->tss[s][t] = D->tss[s][t]; }
+  if (D->dirty & D_RS)
+    for (int s = 0; s < 256; s++)
+      if (D->rs_set[s] && D->rs[s] != S->rs[s]) { g_dev->SetRenderState((D3DRENDERSTATETYPE)s, D->rs[s]); S->rs[s] = D->rs[s]; }
+  if (D->dirty & D_SS)
+    for (int s = 0; s < 20; s++)
+      for (int t = 1; t < 14; t++)
+        if (D->ss_set[s][t] && D->ss[s][t] != S->ss[s][t]) { g_dev->SetSamplerState(sampler_stage(s), (D3DSAMPLERSTATETYPE)t, D->ss[s][t]); S->ss[s][t] = D->ss[s][t]; }
+  if (D->dirty & D_TSS)
+    for (int s = 0; s < 8; s++)
+      for (int t = 1; t < 33; t++)
+        if (D->tss_set[s][t] && D->tss[s][t] != S->tss[s][t]) { g_dev->SetTextureStageState(s, (D3DTEXTURESTAGESTATETYPE)t, D->tss[s][t]); S->tss[s][t] = D->tss[s][t]; }
   for (int s = 0; s < 20; s++) {
     Obj *t = D->tex[s] ? d3d_obj(D->tex[s]) : NULL;
     IDirect3DBaseTexture9 *ht = (t && t->kind != K_SURFACE) ? host_texture(t) : NULL;
@@ -431,25 +439,36 @@ static void sync_state(void) {
     if (decl != S->decl) { g_dev->SetVertexDeclaration(decl); S->decl = decl; S->fvf = 0xffffffffu; }
   } else if (D->fvf != S->fvf) { g_dev->SetFVF(D->fvf); S->fvf = D->fvf; S->decl = NULL; }
 
-  sync_consts(D->vsf, S->vsf, 256, [](int r, float *v, int n) { g_dev->SetVertexShaderConstantF(r, v, n); });
-  sync_consts(D->psf, S->psf, 224, [](int r, float *v, int n) { g_dev->SetPixelShaderConstantF(r, v, n); });
-  sync_consts(D->vsi, S->vsi, 16, [](int r, s32 *v, int n) { g_dev->SetVertexShaderConstantI(r, (const int *)v, n); });
-  sync_consts(D->psi, S->psi, 16, [](int r, s32 *v, int n) { g_dev->SetPixelShaderConstantI(r, (const int *)v, n); });
-  for (int i = 0; i < 16; i++) {
-    if (D->vsb[i] != S->vsb[i]) { BOOL b = D->vsb[i] != 0; g_dev->SetVertexShaderConstantB(i, &b, 1); S->vsb[i] = D->vsb[i]; }
-    if (D->psb[i] != S->psb[i]) { BOOL b = D->psb[i] != 0; g_dev->SetPixelShaderConstantB(i, &b, 1); S->psb[i] = D->psb[i]; }
+  if ((D->dirty & D_VSF) && D->vsf_hi > D->vsf_lo)
+    sync_consts(D->vsf + D->vsf_lo, S->vsf + D->vsf_lo, (int)(D->vsf_hi - D->vsf_lo),
+                [](int r, float *v, int n) { g_dev->SetVertexShaderConstantF(r + d3d_dev()->vsf_lo, v, n); });
+  if ((D->dirty & D_PSF) && D->psf_hi > D->psf_lo)
+    sync_consts(D->psf + D->psf_lo, S->psf + D->psf_lo, (int)(D->psf_hi - D->psf_lo),
+                [](int r, float *v, int n) { g_dev->SetPixelShaderConstantF(r + d3d_dev()->psf_lo, v, n); });
+  if (D->dirty & D_CONSTIB) {
+    sync_consts(D->vsi, S->vsi, 16, [](int r, s32 *v, int n) { g_dev->SetVertexShaderConstantI(r, (const int *)v, n); });
+    sync_consts(D->psi, S->psi, 16, [](int r, s32 *v, int n) { g_dev->SetPixelShaderConstantI(r, (const int *)v, n); });
+    for (int i = 0; i < 16; i++) {
+      if (D->vsb[i] != S->vsb[i]) { BOOL b = D->vsb[i] != 0; g_dev->SetVertexShaderConstantB(i, &b, 1); S->vsb[i] = D->vsb[i]; }
+      if (D->psb[i] != S->psb[i]) { BOOL b = D->psb[i] != 0; g_dev->SetPixelShaderConstantB(i, &b, 1); S->psb[i] = D->psb[i]; }
+    }
   }
+  u32 synced = D_ALL & ~(D_XFORM | D_MAT); /* fixed-function state waits until a fixed-function draw */
+  D->vsf_lo = D->psf_lo = 0xFFFFFFFFu;
+  D->vsf_hi = D->psf_hi = 0;
   if (!vs || !ps) { /* fixed function bits */
+    synced |= D_XFORM | D_MAT;
     static const int ts[] = {2, 3, 256, 16, 17, 18, 19, 20, 21, 22, 23};
-    for (unsigned k = 0; k < sizeof ts / sizeof *ts; k++) {
+    for (unsigned k = 0; (D->dirty & D_XFORM) && k < sizeof ts / sizeof *ts; k++) {
       int t = ts[k];
       if (memcmp(D->transform[t], S->transform[t], 64)) {
         g_dev->SetTransform((D3DTRANSFORMSTATETYPE)t, (const D3DMATRIX *)D->transform[t]);
         memcpy(S->transform[t], D->transform[t], 64);
       }
     }
-    g_dev->SetMaterial((const D3DMATERIAL9 *)D->material);
+    if (D->dirty & D_MAT) g_dev->SetMaterial((const D3DMATERIAL9 *)D->material);
   }
+  D->dirty &= ~synced;
 }
 
 /* ---------------------------------------------------------------- drawing */

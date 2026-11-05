@@ -778,17 +778,32 @@ static void fill_find(u32 p, const char *name, struct stat *st) {
   M32(p + 28) = (u32)((u64)st->st_size >> 32); M32(p + 32) = (u32)st->st_size;
   snprintf((char *)HP(p + 44), 260, "%s", name);
 }
+/* a listing is gathered whole: the game folder's entries plus overlay entries (overlay files replace the game's
+   and carry the app's start time, so the game takes them over its archives) */
+typedef struct { char name[260]; struct stat st; } FindEnt;
+typedef struct { FindEnt *e; int n, cap; const char *mask; } FindList;
+static void find_add(FindList *l, const char *name, const struct stat *st, int replace) {
+  if (!rt_wildmatch(l->mask, name)) return;
+  for (int i = 0; i < l->n; i++)
+    if (!strcasecmp(l->e[i].name, name)) {
+      if (replace && !S_ISDIR(st->st_mode)) l->e[i].st = *st;
+      return;
+    }
+  if (l->n == l->cap) { l->cap = l->cap ? 2 * l->cap : 64; l->e = realloc(l->e, l->cap * sizeof *l->e); }
+  snprintf(l->e[l->n].name, sizeof l->e[l->n].name, "%s", name);
+  l->e[l->n++].st = *st;
+}
+static void find_add_overlay(void *ctx, const char *name, const char *host, int dir) {
+  struct stat st;
+  if (stat(host, &st)) return;
+  if (!dir && st.st_mtime < overlay_time()) st.st_mtime = overlay_time();
+  find_add(ctx, name, &st, 1);
+}
 static int find_next(HObj *o, u32 p) {
-  struct dirent *e;
-  while ((e = readdir(o->dir))) {
-    if (!rt_wildmatch(o->pattern, e->d_name)) continue;
-    char full[4096]; struct stat st;
-    snprintf(full, sizeof full, "%s/%s", o->dirpath, e->d_name);
-    if (stat(full, &st)) continue;
-    fill_find(p, e->d_name, &st);
-    return 1;
-  }
-  return 0;
+  if (o->pos >= o->nents) return 0;
+  FindEnt *e = &((FindEnt *)o->ents)[o->pos++];
+  fill_find(p, e->name, &e->st);
+  return 1;
 }
 API(k_FindFirstFileA) {
   const char *pat = STR(ARG(0));
@@ -798,13 +813,32 @@ API(k_FindFirstFileA) {
   char dirw[2048];
   if (sl) { *sl = 0; snprintf(dirw, sizeof dirw, "%s", w); } else strcpy(dirw, ".");
   char hp[2048]; fs_host_path(dirw, hp, sizeof hp);
-  DIR *d = opendir(hp);
   int savescan = rt_strcasestr(mask, ".fos") != NULL;
-  if (g_trace > 1 || savescan) rt_log("FindFirstFile(%s) dir=%s%s", pat, hp, d ? "" : " (no such folder)");
-  if (!d) { rt_set_error(c, 3); RETURN_STD(2, 0xffffffff); }
+  FindList l = {0};
+  l.mask = !strcmp(mask, "*.*") ? "*" : mask;
+  DIR *d = opendir(hp);
+  if (d) {
+    struct dirent *e;
+    while ((e = readdir(d))) {
+      char full[4096]; struct stat st;
+      snprintf(full, sizeof full, "%s/%s", hp, e->d_name);
+      if (!stat(full, &st)) find_add(&l, e->d_name, &st, 0);
+    }
+    closedir(d);
+  }
+  char rel[2048];
+  int in_overlay = 0;
+  if (overlay_active() && fs_game_rel(dirw, rel, sizeof rel)) {
+    int dir = 0;
+    in_overlay = overlay_find(rel, &dir) && dir;
+    if (in_overlay || !rel[0]) overlay_list(rel, find_add_overlay, &l);
+  }
+  if (g_trace > 1 || savescan) rt_log("FindFirstFile(%s) dir=%s%s", pat, hp, d || in_overlay ? "" : " (no such folder)");
+  if (!d && !in_overlay) { free(l.e); rt_set_error(c, 3); RETURN_STD(2, 0xffffffff); }
+  if (!l.n) { free(l.e); rt_set_error(c, 2); RETURN_STD(2, 0xffffffff); }
   u32 h = h_new(H_FIND); HObj *o = h_get(h);
-  o->dir = d; o->pattern = strdup(!strcmp(mask, "*.*") ? "*" : mask); o->dirpath = strdup(hp);
-  if (!find_next(o, ARG(1))) { h_close(h); rt_set_error(c, 2); RETURN_STD(2, 0xffffffff); }
+  o->ents = l.e; o->nents = l.n; o->pos = 0;
+  find_next(o, ARG(1));
   if (savescan) rt_log("  first match: %s", (char *)HP(ARG(1) + 44));
   RETURN_STD(2, h);
 }

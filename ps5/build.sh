@@ -43,6 +43,8 @@ for f in "$root"/rt/*.c; do
   case $(basename "$f") in platform_null.c|hostd3d9_null.c) continue;; esac
   cc -std=gnu11 $rflags -c "$f" -o "$obj/rt/$(basename "$f" .c).o"
 done
+python3 "$root/tools/embed_assets.py" "$root/assets" "$obj/assets_data.c"   # button prompts, built in
+cc -std=gnu11 -O1 -c "$obj/assets_data.c" -o "$obj/rt/assets_data.o"
 cc -std=c++17 $rflags -Wno-unused-variable -I"$dxvk/include/native/directx" -I"$dxvk/include/native/windows" -I"$dxvk/include/native" \
    -c "$root/rt/hostd3d9.cpp" -o "$obj/rt/hostd3d9.o"
 

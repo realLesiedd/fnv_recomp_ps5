@@ -105,6 +105,19 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   new D3D objects.
 - **v18:** the log reports every frame over 150 ms with a breakdown: draws (pipeline compiles happen there),
   creating GPU objects, uploads, other device calls, Present and game time, plus objects created/freed and MB read.
+- **v19:**
+  - **PlayStation button prompts.** The game's Xbox glyphs (`textures\interface\shared\button\*.dds`,
+    used by barter, dialogue, books, caravan, blackjack and HUD hints) are replaced by original Cross, Circle,
+    Square, Triangle, L1/R1, L2/R2, L3/R3, Options and Create drawings (`tools/make_glyphs.py`).
+  - **Overlay folders** (`rt/overlay.c`). Folders laid over the game folder: their files replace the game's, and
+    their folders merge into directory listings. The game takes a loose file over its archive copy when it finds
+    one, and checks every texture and mesh by name. The app's assets are built into the executable
+    (`tools/embed_assets.py`) and written to `user/assets` on start, so nothing beyond eboot.bin is uploaded.
+    The mods folder can use the same mechanism.
+  - **GPU backend:** state is synced only for kinds the game changed since the last draw (render, sampler and
+    texture-stage states, constant ranges, transforms, viewport, material). Before this, every state was compared
+    on every draw.
+  - The DXVK HUD is twice as large (scale 4).
 - **To watch:** stutters in game; frame rate outdoors at the longer draw distances; dust and smoke clouds
   (player video: heavy orange sheets with hard edges, cause not found yet). The old "all threads 100%" figure came from a
   process clock that is not meaningful on PS5; v14 uses getrusage plus per-thread clocks.

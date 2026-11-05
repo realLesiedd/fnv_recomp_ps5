@@ -47,6 +47,9 @@ fnv_recomp stands on the work of these projects and people. Thank you.
   libavcodec/libavutil from the ps5-payload-dev PacBrew packages, on Linux the system's shared libraries. The
   Bink container is parsed in `rt/bink.c`. Under the LGPL you may relink the app against your own FFmpeg build:
   the full source of everything else is in this repository and `ps5/build.sh` does the link.
+- **[DejaVu Fonts](https://dejavu-fonts.github.io/)** (Bitstream Vera license): DejaVu Sans Bold letters the
+  L1/R1/L2/R2/L3/R3 glyphs drawn by `tools/make_glyphs.py`. The PlayStation-style button prompts (`assets/`) are
+  original drawings made for this project, not Sony artwork.
 - **[Wine](https://www.winehq.org/)** (LGPL): its documentation of DirectSound and WINMM mmio behaviour was the
   reference for corner cases in `rt/dsound.c` and `rt/mmio.c` (no Wine code is used).
 

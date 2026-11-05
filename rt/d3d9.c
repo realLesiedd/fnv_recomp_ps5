@@ -495,6 +495,7 @@ static void make_backbuffers(void) {
   D->viewport[0] = 0; D->viewport[1] = 0; D->viewport[2] = w; D->viewport[3] = h;
   float zn = 0, zf = 1; memcpy(&D->viewport[4], &zn, 4); memcpy(&D->viewport[5], &zf, 4);
   D->scissor[2] = w; D->scissor[3] = h;
+  D->dirty |= D_VIEW;
 }
 API(d_Reset) {
   memcpy(D->pp, HP(ARG(1)), 56);
@@ -568,12 +569,12 @@ API(d_GetDepthStencilSurface) { if (!D->ds) { M32(ARG(1)) = 0; RETURN_STD(2, 0x8
 API(d_BeginScene) { D->in_scene = 1; RETURN_STD(1, S_OK); }
 API(d_EndScene) { D->in_scene = 0; RETURN_STD(1, S_OK); }
 API(d_Clear) { if (hb_active()) hb_clear(ARG(1), ARG(2), ARG(3), ARG(4), asf(ARG(5)), ARG(6)); else swr_clear(ARG(1), ARG(2), ARG(3), ARG(4), asf(ARG(5))); DUMP("Clear n=%u flags=%x color=%08x", ARG(1), ARG(3), ARG(4)); RETURN_STD(7, S_OK); }
-API(d_SetTransform) { u32 t = ARG(1); if (t < 512) memcpy(D->transform[t], HP(ARG(2)), 64); RETURN_STD(3, S_OK); }
+API(d_SetTransform) { u32 t = ARG(1); if (t < 512) memcpy(D->transform[t], HP(ARG(2)), 64); D->dirty |= D_XFORM; RETURN_STD(3, S_OK); }
 API(d_GetTransform) { u32 t = ARG(1); if (t < 512) memcpy(HP(ARG(2)), D->transform[t], 64); RETURN_STD(3, S_OK); }
 API(d_MultiplyTransform) { RETURN_STD(3, S_OK); }
-API(d_SetViewport) { memcpy(D->viewport, HP(ARG(1)), 24); RETURN_STD(2, S_OK); }
+API(d_SetViewport) { memcpy(D->viewport, HP(ARG(1)), 24); D->dirty |= D_VIEW; RETURN_STD(2, S_OK); }
 API(d_GetViewport) { memcpy(HP(ARG(1)), D->viewport, 24); RETURN_STD(2, S_OK); }
-API(d_SetMaterial) { memcpy(D->material, HP(ARG(1)), 68); RETURN_STD(2, S_OK); }
+API(d_SetMaterial) { memcpy(D->material, HP(ARG(1)), 68); D->dirty |= D_MAT; RETURN_STD(2, S_OK); }
 API(d_GetMaterial) { memcpy(HP(ARG(1)), D->material, 68); RETURN_STD(2, S_OK); }
 API(d_SetLight) { u32 i = ARG(1); if (i < 8) memcpy(D->light[i], HP(ARG(2)), 104); RETURN_STD(3, S_OK); }
 API(d_GetLight) { u32 i = ARG(1); if (i < 8) memcpy(HP(ARG(2)), D->light[i], 104); RETURN_STD(3, S_OK); }
@@ -581,7 +582,7 @@ API(d_LightEnable) { u32 i = ARG(1); if (i < 8) D->light_on[i] = ARG(2); RETURN_
 API(d_GetLightEnable) { u32 i = ARG(1); M32(ARG(2)) = i < 8 ? D->light_on[i] : 0; RETURN_STD(3, S_OK); }
 API(d_SetClipPlane) { u32 i = ARG(1); if (i < 6) memcpy(D->clip[i], HP(ARG(2)), 16); RETURN_STD(3, S_OK); }
 API(d_GetClipPlane) { u32 i = ARG(1); if (i < 6) memcpy(HP(ARG(2)), D->clip[i], 16); RETURN_STD(3, S_OK); }
-API(d_SetRenderState) { u32 s = ARG(1); if (s < 256) { D->rs[s] = ARG(2); D->rs_set[s] = 1; } RETURN_STD(3, S_OK); }
+API(d_SetRenderState) { u32 s = ARG(1); if (s < 256) { D->rs[s] = ARG(2); D->rs_set[s] = 1; D->dirty |= D_RS; } RETURN_STD(3, S_OK); }
 API(d_GetRenderState) { u32 s = ARG(1); M32(ARG(2)) = s < 256 ? D->rs[s] : 0; RETURN_STD(3, S_OK); }
 API(d_CreateStateBlock) { M32(ARG(2)) = new_obj(g_vt_sb, K_SB, NULL); RETURN_STD(3, S_OK); }
 API(d_BeginStateBlock) { RETURN_STD(1, S_OK); }
@@ -592,12 +593,12 @@ static u32 sampler_index(u32 s) { return s >= 257 ? 16 + (s - 257) : s; } /* D3D
 API(d_GetTexture) { u32 s = sampler_index(ARG(1)); get_ref(ARG(2), s < 20 ? D->tex[s] : 0); RETURN_STD(3, S_OK); }
 API(d_SetTexture) { u32 s = sampler_index(ARG(1)); if (s < 20) set_ref(&D->tex[s], ARG(2)); RETURN_STD(3, S_OK); }
 API(d_GetTextureStageState) { u32 s = ARG(1), t = ARG(2); M32(ARG(3)) = (s < 8 && t < 33) ? D->tss[s][t] : 0; RETURN_STD(4, S_OK); }
-API(d_SetTextureStageState) { u32 s = ARG(1), t = ARG(2); if (s < 8 && t < 33) { D->tss[s][t] = ARG(3); D->tss_set[s][t] = 1; } RETURN_STD(4, S_OK); }
+API(d_SetTextureStageState) { u32 s = ARG(1), t = ARG(2); if (s < 8 && t < 33) { D->tss[s][t] = ARG(3); D->tss_set[s][t] = 1; D->dirty |= D_TSS; } RETURN_STD(4, S_OK); }
 API(d_GetSamplerState) { u32 s = sampler_index(ARG(1)), t = ARG(2); M32(ARG(3)) = (s < 20 && t < 14) ? D->ss[s][t] : 0; RETURN_STD(4, S_OK); }
-API(d_SetSamplerState) { u32 s = sampler_index(ARG(1)), t = ARG(2); if (s < 20 && t < 14) { D->ss[s][t] = ARG(3); D->ss_set[s][t] = 1; } RETURN_STD(4, S_OK); }
+API(d_SetSamplerState) { u32 s = sampler_index(ARG(1)), t = ARG(2); if (s < 20 && t < 14) { D->ss[s][t] = ARG(3); D->ss_set[s][t] = 1; D->dirty |= D_SS; } RETURN_STD(4, S_OK); }
 API(d_ValidateDevice) { if (ARG(1)) M32(ARG(1)) = 1; RETURN_STD(2, S_OK); }
 API(d_GetCurrentTexturePalette) { M32(ARG(1)) = 0; RETURN_STD(2, S_OK); }
-API(d_SetScissorRect) { memcpy(D->scissor, HP(ARG(1)), 16); RETURN_STD(2, S_OK); }
+API(d_SetScissorRect) { memcpy(D->scissor, HP(ARG(1)), 16); D->dirty |= D_VIEW; RETURN_STD(2, S_OK); }
 API(d_GetScissorRect) { memcpy(HP(ARG(1)), D->scissor, 16); RETURN_STD(2, S_OK); }
 API(d_GetSoftwareVertexProcessing) { RETURN_STD(1, 0); }
 API(d_GetNPatchMode) { c->st[(c->top - 1) & 7] = 0; c->top = (c->top - 1) & 7; RETURN_STD(1, 0); } /* returns float in st0 */
@@ -643,8 +644,20 @@ API(d_GetVertexShader) { get_ref(ARG(1), D->vs); RETURN_STD(2, S_OK); }
 API(d_CreatePixelShader) { M32(ARG(2)) = make_shader(K_PS, ARG(1)); RETURN_STD(3, S_OK); }
 API(d_SetPixelShader) { set_ref(&D->ps, ARG(1)); RETURN_STD(2, S_OK); }
 API(d_GetPixelShader) { get_ref(ARG(1), D->ps); RETURN_STD(2, S_OK); }
+/* setting constants records what changed for the GPU backend: the float registers as a range */
+static inline void dirty_f(u32 *lo, u32 *hi, u32 r, u32 n, u32 flag) {
+  D->dirty |= flag;
+  if (r < *lo) *lo = r;
+  if (r + n > *hi) *hi = r + n;
+}
+#define DIRTY_vsf(r, n) dirty_f(&D->vsf_lo, &D->vsf_hi, r, n, D_VSF)
+#define DIRTY_psf(r, n) dirty_f(&D->psf_lo, &D->psf_hi, r, n, D_PSF)
+#define DIRTY_vsi(r, n) (D->dirty |= D_CONSTIB)
+#define DIRTY_psi(r, n) (D->dirty |= D_CONSTIB)
+#define DIRTY_vsb(r, n) (D->dirty |= D_CONSTIB)
+#define DIRTY_psb(r, n) (D->dirty |= D_CONSTIB)
 #define CONSTS(name, arr, max, esz)                                                                                     \
-  API(d_Set##name) { u32 r = ARG(1), n = ARG(3); if (r + n <= max) memcpy(&D->arr[r], HP(ARG(2)), n * esz); RETURN_STD(4, S_OK); } \
+  API(d_Set##name) { u32 r = ARG(1), n = ARG(3); if (r + n <= max) { memcpy(&D->arr[r], HP(ARG(2)), n * esz); DIRTY_##arr(r, n); } RETURN_STD(4, S_OK); } \
   API(d_Get##name) { u32 r = ARG(1), n = ARG(3); if (r + n <= max) memcpy(HP(ARG(2)), &D->arr[r], n * esz); RETURN_STD(4, S_OK); }
 CONSTS(VertexShaderConstantF, vsf, 256, 16)
 CONSTS(PixelShaderConstantF, psf, 224, 16)
@@ -816,6 +829,7 @@ API(i_CreateDevice) {
   for (int s = 0; s < 20; s++) { D->ss[s][1] = D->ss[s][2] = D->ss[s][3] = 1; D->ss[s][5] = D->ss[s][6] = 1; }
   for (int i = 0; i < 16; i++) D->stream_freq[i] = 1;
   D->rs[7] = 1; D->rs[14] = 1; D->rs[22] = 3; D->rs[23] = 4; D->rs[19] = 2; D->rs[20] = 1; D->rs[168] = 0xf; /* ZENABLE ZWRITE CULL ZFUNC SRCBLEND DESTBLEND COLORWRITE */
+  dev_dirty_all(D);
   make_backbuffers();
   memcpy(HP(ARG(5)), D->pp, 56);
   g_device = new_obj(vt, K_DEVICE, NULL);
