@@ -8,7 +8,6 @@
  * from the front end's copy, only where it changed. Render targets live on the GPU
  * and are read back when the game (or a screenshot) asks for their pixels. */
 #include <d3d9.h>
-#include <SDL2/SDL.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,8 +38,12 @@ extern "C" int hb_init(void) {
     rt_log("GPU backend: off (%s); using the software renderer", hb_wanted() ? "no Vulkan window" : "FNV_RENDERER=software");
     return 0;
   }
+#ifdef __PROSPERO__
+  setenv("DXVK_WSI_DRIVER", "PS5", 0);
+  setenv("DXVK_LOG_PATH", "/app0", 0);
+#else
   setenv("DXVK_WSI_DRIVER", "SDL2", 0);
-  rt_log("GPU backend: SDL video init=%x driver=%s window=%p", SDL_WasInit(SDL_INIT_VIDEO), SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "(none)", plat_window());
+#endif
   g_d3d = Direct3DCreate9(D3D_SDK_VERSION);
   if (!g_d3d) { rt_log("GPU backend: DXVK Direct3DCreate9 failed; using the software renderer"); return 0; }
   D3DADAPTER_IDENTIFIER9 id;

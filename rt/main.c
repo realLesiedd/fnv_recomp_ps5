@@ -265,12 +265,11 @@ int main(int argc, char **argv) {
   const char *game = getenv("FNV_GAME_DIR");
   if (getenv("FNV_TRACE")) g_trace = atoi(getenv("FNV_TRACE"));
 #ifdef __PROSPERO__
-  /* PS5: everything lives under /data/fnv_recomp (copy the game folder to /data/fnv_recomp/game);
-     the log goes to a file because payloads have no console */
-  mkdir("/data/fnv_recomp", 0755);
-  if (!game) game = "/data/fnv_recomp/game";
-  if (!getenv("FNV_USER_DIR")) setenv("FNV_USER_DIR", "/data/fnv_recomp/user", 1);
-  if (!freopen("/data/fnv_recomp/fnv.log", "w", stderr)) perror("log file");
+  /* PS5 app: /app0 is the app's folder, /data/homebrew/<title id>/ on the console.
+     The game's files go in game/, settings and saves land in user/, the log in fnv.log. */
+  if (!game) game = "/app0/game";
+  if (!getenv("FNV_USER_DIR")) setenv("FNV_USER_DIR", "/app0/user", 1);
+  if (!freopen("/app0/fnv.log", "w", stderr)) perror("log file");
   setvbuf(stderr, NULL, _IOLBF, 0);
   if (!getenv("FNV_TRACE")) g_trace = 1;
 #endif

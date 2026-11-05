@@ -23,42 +23,31 @@ u8 *g_guest_mem;
  * guest allocates them, so untouched address space costs nothing and stray
  * pointers fault (reported with the guest address). */
 #ifdef __PROSPERO__
-/* PS5: an app's ordinary anonymous memory comes from a small "flexible" pool, too small for
- * the game (the gta4-ps5 port documents the same limit). Guest memory is backed by direct
- * memory instead, mapped at fixed addresses inside the reserved 4 GiB window. */
-#include <sys/types.h>
-int sceKernelAllocateMainDirectMemory(size_t len, size_t align, int type, off_t *phys);
-int sceKernelMapDirectMemory(void **addr, size_t len, int prot, int flags, off_t phys, size_t align);
-int sceKernelReleaseDirectMemory(off_t phys, size_t len);
-int sceKernelReserveVirtualRange(void **addr, size_t len, int flags, size_t align);
-#define PS5_MAP_FIXED 0x10
-#define PS5_PROT_CPU_RW 0x03
-static off_t g_phys[0x80000000u / 0x10000u];     /* direct memory behind each reservation (by base granule) */
+/* PS5: an app's anonymous memory comes from a small "flexible" budget, far too small for
+ * the game (the gta4-ps5 port hit the same limit). libps5platform's virtual ranges (Mihawk,
+ * PS5_PayloadSDK) back a reserved range with direct memory in 64 KiB units on commit,
+ * zero on the next commit after a decommit - VirtualAlloc's semantics. */
+#include <ps5platform/shm.h>
+/* one direct-memory object per reservation, mapped at its place in the window (as the
+   gta4-ps5 port maps its guest views); never charged to the flexible budget */
+static struct ps5_shm g_shm[0x80000000u / 0x10000u];
 static void commit(u32 a, u32 n) {
-  off_t phys = 0;
-  if (sceKernelAllocateMainDirectMemory(n, 0x10000, 0 /* WB */, &phys)) {
+  struct ps5_shm *sh = &g_shm[a / 0x10000u];
+  void *view = NULL;
+  if (ps5_shm_create(n, sh) || ps5_shm_map(sh, 0, n, HP(a), PS5_SHM_READ | PS5_SHM_WRITE, PS5_SHM_FIXED, &view) || view != HP(a)) {
     fprintf(stderr, "guest memory: out of direct memory (%u KiB at %08x)\n", n >> 10, a); exit(2);
   }
-  void *addr = HP(a);
-  if (sceKernelMapDirectMemory(&addr, n, PS5_PROT_CPU_RW, PS5_MAP_FIXED, phys, 0x10000) || addr != HP(a)) {
-    fprintf(stderr, "guest memory: sceKernelMapDirectMemory failed at %08x\n", a); exit(2);
-  }
-  memset(addr, 0, n); /* Windows hands out zeroed pages */
-  g_phys[a / 0x10000u] = phys;
+  memset(view, 0, n); /* Windows hands out zeroed pages */
 }
 static void uncommit(u32 base, u32 n) {
-  munmap(HP(base), n);
-  void *addr = HP(base);
-  if (sceKernelReserveVirtualRange(&addr, n, PS5_MAP_FIXED, 0x10000))
-    mmap(HP(base), n, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-  if (g_phys[base / 0x10000u]) sceKernelReleaseDirectMemory(g_phys[base / 0x10000u], n);
-  g_phys[base / 0x10000u] = 0;
+  struct ps5_shm *sh = &g_shm[base / 0x10000u];
+  ps5_shm_unmap(HP(base), n, PS5_SHM_KEEP_RESERVED);
+  ps5_shm_destroy(sh);
+  memset(sh, 0, sizeof *sh);
 }
 static void *reserve_window(void) {
   void *p = NULL;
-  if (sceKernelReserveVirtualRange(&p, 0x100000000ull, 0, 0x10000) == 0 && p) return p;
-  p = mmap(NULL, 0x100000000ull, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  return p == MAP_FAILED ? NULL : p;
+  return ps5_vrange_reserve(0x100000000ull, NULL, 0x10000, &p) == 0 ? p : NULL;
 }
 #else
 static void commit(u32 a, u32 n) {
@@ -74,7 +63,7 @@ static void *reserve_window(void) {
 static void fresh(u32 a, u32 n, int prot) {
 #ifdef __PROSPERO__
   /* never re-map inside the window on PS5: zero (decommit) or hand the memory back (release) */
-  if (prot == PROT_NONE) uncommit(a, n); else memset(HP(a), 0, n);
+  if (prot == PROT_NONE) uncommit(a, n); else memset(HP(a), 0, n); /* decommit inside a reservation: zero */
 #else
   if (mmap(HP(a), n, prot, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED) perror("mmap (release guest memory)");
 #endif

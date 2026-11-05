@@ -1,0 +1,361 @@
+diff --git a/meson.build b/meson.build
+index 780d7aa..254e254 100644
+--- a/meson.build
++++ b/meson.build
+@@ -147,6 +147,9 @@ else
+     './include/native/directx'
+   ]
+ 
++  if get_option('native_ps5')
++    compiler_args += ['-DDXVK_WSI_PS5']
++  endif
+   lib_sdl3 = dependency('sdl3', required: get_option('native_sdl3'))
+   lib_sdl2 = dependency('sdl2', required: get_option('native_sdl2'))
+   lib_glfw = dependency('glfw', required: get_option('native_glfw'))
+@@ -159,7 +162,7 @@ else
+   if lib_glfw.found()
+     compiler_args += ['-DDXVK_WSI_GLFW']
+   endif
+-  if (not lib_sdl3.found() and not lib_sdl2.found() and not lib_glfw.found())
++  if (not get_option('native_ps5') and not lib_sdl3.found() and not lib_sdl2.found() and not lib_glfw.found())
+     error('SDL3, SDL2, or GLFW are required to build dxvk-native')
+   endif
+   
+diff --git a/meson_options.txt b/meson_options.txt
+index 98851af..1e3b4ab 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -6,4 +6,5 @@ option('enable_d3d11', type : 'boolean', value : true, description: 'Build D3D11
+ option('build_id',     type : 'boolean', value : false)
+ option('native_glfw',  type : 'feature', value : 'auto', description: 'Enable GLFW WSI for DXVK Native')
+ option('native_sdl2',  type : 'feature', value : 'auto', description: 'Enable SDL2 WSI for DXVK Native')
++option('native_ps5',   type : 'boolean', value : false, description: 'PS5 WSI (VK_KHR_display on the console, fnv_recomp)')
+ option('native_sdl3',  type : 'feature', value : 'auto', description: 'Enable SDL3 WSI for DXVK Native')
+diff --git a/src/d3d9/meson.build b/src/d3d9/meson.build
+index 2f45946..42ead01 100644
+--- a/src/d3d9/meson.build
++++ b/src/d3d9/meson.build
+@@ -57,15 +57,24 @@ if platform != 'windows'
+   d3d9_link_depends += files('d3d9.sym')
+ endif
+ 
+-d3d9_dll = shared_library(dxvk_name_prefix+'d3d9', d3d9_src, glsl_generator.process(d3d9_shaders), d3d9_res,
+-  dependencies        : [ dxso_dep, dxvk_dep ],
+-  include_directories : dxvk_include_path,
+-  install             : true,
+-  vs_module_defs      : 'd3d9'+def_spec_ext,
+-  link_args           : d3d9_ld_args,
+-  link_depends        : [ d3d9_link_depends ],
+-  kwargs              : dxvk_so_version,
+-)
++if get_option('native_ps5')
++  # PS5 (fnv_recomp): one app, everything linked statically
++  d3d9_dll = static_library(dxvk_name_prefix+'d3d9', d3d9_src, glsl_generator.process(d3d9_shaders), d3d9_res,
++    dependencies        : [ dxso_dep, dxvk_dep ],
++    include_directories : dxvk_include_path,
++    install             : true,
++  )
++else
++  d3d9_dll = shared_library(dxvk_name_prefix+'d3d9', d3d9_src, glsl_generator.process(d3d9_shaders), d3d9_res,
++    dependencies        : [ dxso_dep, dxvk_dep ],
++    include_directories : dxvk_include_path,
++    install             : true,
++    vs_module_defs      : 'd3d9'+def_spec_ext,
++    link_args           : d3d9_ld_args,
++    link_depends        : [ d3d9_link_depends ],
++    kwargs              : dxvk_so_version,
++  )
++endif
+ 
+ d3d9_dep = declare_dependency(
+   link_with           : [ d3d9_dll ],
+diff --git a/src/util/util_env.cpp b/src/util/util_env.cpp
+index c86c3ab..4bec8d7 100644
+--- a/src/util/util_env.cpp
++++ b/src/util/util_env.cpp
+@@ -124,10 +124,14 @@ namespace dxvk::env {
+ 
+       SetThreadDescription(::GetCurrentThread(), wideName.data());
+     }
++#else
++#if defined(DXVK_WSI_PS5)
++    (void)name; /* the PS5 SDK has no pthread_setname_np */
+ #else
+     std::array<char, 16> posixName = {};
+     dxvk::str::strlcpy(posixName.data(), name.c_str(), 16);
+     ::pthread_setname_np(pthread_self(), posixName.data());
++#endif
+ #endif
+   }
+ 
+diff --git a/src/util/util_version.h b/src/util/util_version.h
+index 995d8b9..f3a4c0d 100644
+--- a/src/util/util_version.h
++++ b/src/util/util_version.h
+@@ -11,6 +11,14 @@ namespace dxvk {
+   /**
+    * \brief Decoded driver version
+    */
++  /* FreeBSD/PS5 <sys/types.h> defines major()/minor() as macros */
++#ifdef major
++#undef major
++#endif
++#ifdef minor
++#undef minor
++#endif
++
+   class Version {
+ 
+   public:
+diff --git a/src/vulkan/vulkan_loader.cpp b/src/vulkan/vulkan_loader.cpp
+index f9d1e98..7ffce04 100644
+--- a/src/vulkan/vulkan_loader.cpp
++++ b/src/vulkan/vulkan_loader.cpp
+@@ -1,4 +1,5 @@
+ #include <tuple>
++#include <cstring>
+ 
+ #include "vulkan_loader.h"
+ 
+@@ -9,6 +10,22 @@
+ 
+ namespace dxvk::vk {
+ 
++#if defined(DXVK_WSI_PS5)
++  /* PS5: PS5_Mesa's RADV is linked into the app; its ICD entry point is the loader
++     (with the KHR fallbacks plume-ps5 uses for core 1.1 queries) */
++  extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName);
++  static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL ps5GetInstanceProcAddr(VkInstance instance, const char *pName) {
++    if (!pName) return nullptr;
++    PFN_vkVoidFunction fn = vk_icdGetInstanceProcAddr(instance, pName);
++    if (fn) return fn;
++    if (!std::strcmp(pName, "vkGetPhysicalDeviceProperties2")) return vk_icdGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties2KHR");
++    if (!std::strcmp(pName, "vkGetPhysicalDeviceFeatures2")) return vk_icdGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2KHR");
++    return nullptr;
++  }
++  static std::pair<HMODULE, PFN_vkGetInstanceProcAddr> loadVulkanLibrary() {
++    return std::make_pair(HMODULE(nullptr), &ps5GetInstanceProcAddr);
++  }
++#else
+   static std::pair<HMODULE, PFN_vkGetInstanceProcAddr> loadVulkanLibrary() {
+     static const std::array<const char*, 2> dllNames = {{
+ #ifdef _WIN32
+@@ -40,6 +57,7 @@ namespace dxvk::vk {
+     Logger::err("Vulkan: vkGetInstanceProcAddr not found");
+     return { };
+   }
++#endif
+ 
+   LibraryLoader::LibraryLoader() {
+     std::tie(m_library, m_getInstanceProcAddr) = loadVulkanLibrary();
+diff --git a/src/wsi/meson.build b/src/wsi/meson.build
+index 1d88e2c..c57d86e 100644
+--- a/src/wsi/meson.build
++++ b/src/wsi/meson.build
+@@ -13,6 +13,7 @@ wsi_src = [
+   'glfw/wsi_monitor_glfw.cpp',
+   'glfw/wsi_platform_glfw.cpp',
+   'glfw/wsi_window_glfw.cpp',
++  'ps5/wsi_platform_ps5.cpp',
+ ]
+ 
+ wsi_deps = [ dep_displayinfo ]
+diff --git a/src/wsi/ps5/wsi_platform_ps5.cpp b/src/wsi/ps5/wsi_platform_ps5.cpp
+new file mode 100644
+index 0000000..0d65941
+--- /dev/null
++++ b/src/wsi/ps5/wsi_platform_ps5.cpp
+@@ -0,0 +1,156 @@
++/* PS5 WSI for DXVK native (fnv_recomp).
++ *
++ * A jailbroken PS5 has one display (the TV) and no windowing system: the
++ * "window" DXVK is given is just a token, and the swap chain surface is a
++ * VK_KHR_display plane surface on the console's video output, provided by
++ * PS5_Mesa's RADV (mihawk-99). The display/plane/mode selection follows
++ * plume-ps5's createPs5DisplaySurface (Nazky, MIT license). */
++#if defined(DXVK_WSI_PS5)
++
++#include "../wsi_platform.h"
++#include "../wsi_window.h"
++#include "../wsi_monitor.h"
++#include "../../util/util_string.h"
++#include "../../util/log/log.h"
++
++#include <vector>
++#include <cstring>
++
++extern "C" int sceSystemServiceHideSplashScreen();
++
++namespace dxvk::wsi {
++
++  /* size of the TV mode chosen when the surface was created; 4K until then */
++  static uint32_t g_ps5Width = 3840, g_ps5Height = 2160, g_ps5RefreshMilliHz = 60000;
++  static const HMONITOR g_ps5Monitor = reinterpret_cast<HMONITOR>(uintptr_t(1));
++
++  class Ps5WsiDriver : public WsiDriver {
++  public:
++    std::vector<const char *> getInstanceExtensions() override {
++      return { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_DISPLAY_EXTENSION_NAME };
++    }
++
++    HMONITOR getDefaultMonitor() override { return g_ps5Monitor; }
++    HMONITOR enumMonitors(uint32_t index) override { return index == 0 ? g_ps5Monitor : nullptr; }
++    HMONITOR enumMonitors(const LUID *[], uint32_t, uint32_t index) override { return enumMonitors(index); }
++
++    bool getDisplayName(HMONITOR, WCHAR (&Name)[32]) override {
++      static const char n[] = "\\\\.\\DISPLAY1";
++      for (size_t i = 0; i < sizeof n; i++) Name[i] = n[i];
++      return true;
++    }
++    bool getDesktopCoordinates(HMONITOR, RECT *pRect) override {
++      pRect->left = 0; pRect->top = 0; pRect->right = LONG(g_ps5Width); pRect->bottom = LONG(g_ps5Height);
++      return true;
++    }
++    bool getDisplayMode(HMONITOR m, uint32_t modeNumber, WsiMode *pMode) override {
++      if (modeNumber != 0) return false;
++      return getCurrentDisplayMode(m, pMode);
++    }
++    bool getCurrentDisplayMode(HMONITOR, WsiMode *pMode) override {
++      pMode->width = g_ps5Width;
++      pMode->height = g_ps5Height;
++      pMode->refreshRate = WsiRational{ g_ps5RefreshMilliHz, 1000 };
++      pMode->bitsPerPixel = 32;
++      pMode->interlaced = false;
++      return true;
++    }
++    bool getDesktopDisplayMode(HMONITOR m, WsiMode *pMode) override { return getCurrentDisplayMode(m, pMode); }
++    WsiEdidData getMonitorEdid(HMONITOR) override { return {}; }
++
++    void getWindowSize(HWND, uint32_t *pWidth, uint32_t *pHeight) override {
++      if (pWidth) *pWidth = g_ps5Width;
++      if (pHeight) *pHeight = g_ps5Height;
++    }
++    void resizeWindow(HWND, DxvkWindowState *, uint32_t, uint32_t) override {}
++    bool setWindowMode(HMONITOR, HWND, DxvkWindowState *, const WsiMode &) override { return true; }
++    bool enterFullscreenMode(HMONITOR, HWND, DxvkWindowState *, bool) override { return true; }
++    bool leaveFullscreenMode(HWND, DxvkWindowState *, bool) override { return true; }
++    bool restoreDisplayMode() override { return true; }
++    HMONITOR getWindowMonitor(HWND) override { return g_ps5Monitor; }
++    bool isWindow(HWND hWindow) override { return hWindow != nullptr; }
++    bool isMinimized(HWND) override { return false; }
++    bool isOccluded(HWND) override { return false; }
++    void updateFullscreenWindow(HMONITOR, HWND, bool) override {}
++
++    VkResult createSurface(HWND, PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkSurfaceKHR *pSurface) override {
++      sceSystemServiceHideSplashScreen();
++      auto enumDevices = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(gipa(instance, "vkEnumeratePhysicalDevices"));
++      auto getDisplays = reinterpret_cast<PFN_vkGetPhysicalDeviceDisplayPropertiesKHR>(gipa(instance, "vkGetPhysicalDeviceDisplayPropertiesKHR"));
++      auto getPlanes = reinterpret_cast<PFN_vkGetPhysicalDeviceDisplayPlanePropertiesKHR>(gipa(instance, "vkGetPhysicalDeviceDisplayPlanePropertiesKHR"));
++      auto getModes = reinterpret_cast<PFN_vkGetDisplayModePropertiesKHR>(gipa(instance, "vkGetDisplayModePropertiesKHR"));
++      auto createPlaneSurface = reinterpret_cast<PFN_vkCreateDisplayPlaneSurfaceKHR>(gipa(instance, "vkCreateDisplayPlaneSurfaceKHR"));
++      if (!enumDevices || !getDisplays || !getPlanes || !getModes || !createPlaneSurface) {
++        Logger::err("PS5 WSI: VK_KHR_display is not available");
++        return VK_ERROR_EXTENSION_NOT_PRESENT;
++      }
++      uint32_t n = 1;
++      VkPhysicalDevice gpu = VK_NULL_HANDLE;
++      if (enumDevices(instance, &n, &gpu) < 0 || gpu == VK_NULL_HANDLE) return VK_ERROR_INITIALIZATION_FAILED;
++
++      uint32_t displayCount = 0;
++      if (getDisplays(gpu, &displayCount, nullptr) != VK_SUCCESS || !displayCount) {
++        Logger::err("PS5 WSI: no display");
++        return VK_ERROR_INITIALIZATION_FAILED;
++      }
++      std::vector<VkDisplayPropertiesKHR> displays(displayCount);
++      getDisplays(gpu, &displayCount, displays.data());
++      uint32_t planeCount = 0;
++      if (getPlanes(gpu, &planeCount, nullptr) != VK_SUCCESS || !planeCount) return VK_ERROR_INITIALIZATION_FAILED;
++      std::vector<VkDisplayPlanePropertiesKHR> planes(planeCount);
++      getPlanes(gpu, &planeCount, planes.data());
++
++      /* the first display with modes; prefer its 4K mode */
++      VkDisplayKHR display = VK_NULL_HANDLE;
++      VkDisplayModeKHR mode = VK_NULL_HANDLE;
++      VkDisplayModeParametersKHR params = {};
++      for (uint32_t i = 0; i < displayCount && mode == VK_NULL_HANDLE; i++) {
++        uint32_t modeCount = 0;
++        if (getModes(gpu, displays[i].display, &modeCount, nullptr) != VK_SUCCESS || !modeCount) continue;
++        std::vector<VkDisplayModePropertiesKHR> modes(modeCount);
++        if (getModes(gpu, displays[i].display, &modeCount, modes.data()) != VK_SUCCESS) continue;
++        display = displays[i].display;
++        mode = modes[0].displayMode;
++        params = modes[0].parameters;
++        for (uint32_t m = 0; m < modeCount; m++) {
++          if (modes[m].parameters.visibleRegion.width == 3840 && modes[m].parameters.visibleRegion.height == 2160) {
++            mode = modes[m].displayMode;
++            params = modes[m].parameters;
++            break;
++          }
++        }
++      }
++      if (mode == VK_NULL_HANDLE) {
++        Logger::err("PS5 WSI: no display mode");
++        return VK_ERROR_INITIALIZATION_FAILED;
++      }
++      uint32_t plane = 0;
++      for (uint32_t i = 0; i < planeCount; i++)
++        if (planes[i].currentDisplay == VK_NULL_HANDLE || planes[i].currentDisplay == display) { plane = i; break; }
++
++      VkDisplaySurfaceCreateInfoKHR info = { VK_STRUCTURE_TYPE_DISPLAY_SURFACE_CREATE_INFO_KHR };
++      info.displayMode = mode;
++      info.planeIndex = plane;
++      info.planeStackIndex = planes[plane].currentStackIndex;
++      info.transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
++      info.globalAlpha = 1.0f;
++      info.alphaMode = VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR;
++      info.imageExtent = params.visibleRegion;
++      g_ps5Width = params.visibleRegion.width;
++      g_ps5Height = params.visibleRegion.height;
++      if (params.refreshRate) g_ps5RefreshMilliHz = params.refreshRate;
++      Logger::info(str::format("PS5 WSI: TV mode ", g_ps5Width, "x", g_ps5Height, " @ ", g_ps5RefreshMilliHz / 1000, " Hz"));
++      return createPlaneSurface(instance, &info, nullptr, pSurface);
++    }
++  };
++
++  static bool createPs5WsiDriver(WsiDriver **driver) {
++    *driver = new Ps5WsiDriver();
++    return true;
++  }
++
++  WsiBootstrap Ps5WSI = { "PS5", createPs5WsiDriver };
++
++}
++
++#endif
+diff --git a/src/wsi/wsi_platform.cpp b/src/wsi/wsi_platform.cpp
+index c6f12bd..fdfda70 100644
+--- a/src/wsi/wsi_platform.cpp
++++ b/src/wsi/wsi_platform.cpp
+@@ -12,6 +12,9 @@ namespace dxvk::wsi {
+ #if defined(DXVK_WSI_WIN32)
+     &Win32WSI,
+ #endif
++#if defined(DXVK_WSI_PS5)
++    &Ps5WSI,
++#endif
+ #if defined(DXVK_WSI_SDL3)
+     &Sdl3WSI,
+ #endif
+@@ -33,6 +36,8 @@ namespace dxvk::wsi {
+         // for other platforms however we _need_ to know which WSI to use!
+ #if defined(DXVK_WSI_WIN32)
+         hint = "Win32";
++#elif defined(DXVK_WSI_PS5)
++        hint = "PS5";
+ #else
+         throw DxvkError("DXVK_WSI_DRIVER environment variable unset");
+ #endif
+diff --git a/src/wsi/wsi_platform.h b/src/wsi/wsi_platform.h
+index 80dd8c5..ea9d2b3 100644
+--- a/src/wsi/wsi_platform.h
++++ b/src/wsi/wsi_platform.h
+@@ -105,6 +105,9 @@ namespace dxvk::wsi {
+ #if defined(DXVK_WSI_WIN32)
+   extern WsiBootstrap Win32WSI;
+ #endif
++#if defined(DXVK_WSI_PS5)
++  extern WsiBootstrap Ps5WSI;
++#endif
+ #if defined(DXVK_WSI_SDL3)
+   extern WsiBootstrap Sdl3WSI;
+ #endif

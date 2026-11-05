@@ -16,6 +16,19 @@ void *plat_window(void) { return g_win; }
 int plat_gpu_window(void) { return g_vulkan; }
 static pthread_mutex_t g_in_lock = PTHREAD_MUTEX_INITIALIZER;
 
+#ifdef __PROSPERO__
+/* PS5: the GPU renderer (DXVK) draws straight to the TV through VK_KHR_display, so SDL
+   (ps5-payload-dev's port) only provides the DualSense and audio; the "window" is a token. */
+static int g_token;
+int plat_init(void) {
+  if (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) rt_log("platform: SDL_Init failed (%s)", SDL_GetError());
+  g_win = (SDL_Window *)&g_token;
+  g_vulkan = 1;
+  for (int i = 0; i < SDL_NumJoysticks() && i < 4; i++)
+    if (SDL_IsGameController(i)) { g_pad[i] = SDL_GameControllerOpen(i); rt_log("platform: controller %d (%s)", i, SDL_GameControllerName(g_pad[i])); }
+  return 1;
+}
+#else
 int plat_init(void) {
   if (getenv("FNV_HEADLESS")) return 0;
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) {
@@ -23,10 +36,6 @@ int plat_init(void) {
     return 0;
   }
   int w = 1280, h = 720;
-#ifdef __PROSPERO__
-  SDL_DisplayMode dm;
-  if (SDL_GetCurrentDisplayMode(0, &dm) == 0) { w = dm.w; h = dm.h; }
-#endif
   /* the GPU renderer (DXVK) presents through Vulkan; the software renderer blits to the window surface */
   extern int hb_wanted(void);
   g_vulkan = hb_wanted();
@@ -44,6 +53,8 @@ int plat_init(void) {
   rt_log("platform: SDL %s video driver, window %dx%d", SDL_GetCurrentVideoDriver(), w, h);
   return 1;
 }
+
+#endif
 
 void plat_present(const uint32_t *bgra, int w, int h, int pitch) {
   if (!g_win || g_vulkan) return;
