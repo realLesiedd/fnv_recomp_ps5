@@ -36,6 +36,14 @@ fnv_recomp stands on the work of these projects and people. Thank you.
 - **[SDL2](https://libsdl.org)** (Sam Lantinga and contributors).
 - **[DXVK](https://github.com/doitsujin/dxvk)** (Philip Rebohle and contributors, zlib license): Direct3D 9 on Vulkan, the GPU renderer (`rt/hostd3d9.cpp` drives its native d3d9 build).
 - **[SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD)** for downloading the player's own copy.
+- **[stb_vorbis](https://github.com/nothings/stb)** (Sean Barrett and contributors, public domain or MIT): decodes the
+  game's Ogg Vorbis voices and effects behind the libvorbisfile calls (`rt/vorbis.c`). Bundled unmodified in
+  `third_party/`.
+- **[dr_mp3](https://github.com/mackron/dr_libs)** (David Reid, public domain or MIT-0; based on
+  [minimp3](https://github.com/lieff/minimp3) by lieff): decodes the MP3 music behind DirectShow (`rt/dshow.c`).
+  Bundled unmodified in `third_party/`.
+- **[Wine](https://www.winehq.org/)** (LGPL): its documentation of DirectSound and WINMM mmio behaviour was the
+  reference for corner cases in `rt/dsound.c` and `rt/mmio.c` (no Wine code is used).
 
 Each project keeps its own license. Code taken or adapted from another project carries that project's notice where
 it is used.

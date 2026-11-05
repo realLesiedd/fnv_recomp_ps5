@@ -165,3 +165,24 @@ void plat_mouse(int32_t *dx, int32_t *dy, int32_t *dz, uint8_t b[8]) {
   *dx = g_mdx; *dy = g_mdy; *dz = g_mdz; g_mdx = g_mdy = g_mdz = 0; memcpy(b, g_mbtn, 8);
   pthread_mutex_unlock(&g_in_lock);
 }
+
+/* ---- audio: PulseAudio/ALSA on Linux, sceAudioOut on PS5 (SDL's PS5 driver) ---- */
+static PlatAudioFill g_audio_fill;
+static void audio_cb(void *user, Uint8 *stream, int len) { (void)user; g_audio_fill((int16_t *)stream, len / 4); }
+int plat_audio_open(PlatAudioFill fill) {
+  if (getenv("FNV_NO_AUDIO")) return 0;
+  if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) { rt_log("audio: SDL audio init failed (%s)", SDL_GetError()); return 0; }
+  SDL_AudioSpec want, have;
+  SDL_zero(want);
+  want.freq = 48000;
+  want.format = AUDIO_S16SYS;
+  want.channels = 2;
+  want.samples = 1024;
+  want.callback = audio_cb;
+  g_audio_fill = fill;
+  SDL_AudioDeviceID dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+  if (!dev) { rt_log("audio: no output device (%s)", SDL_GetError()); return 0; }
+  rt_log("audio: %s, %d Hz stereo, %d-frame buffer", SDL_GetCurrentAudioDriver(), have.freq, have.samples);
+  SDL_PauseAudioDevice(dev, 0);
+  return have.freq;
+}

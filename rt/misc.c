@@ -69,13 +69,6 @@ API(w_timeGetTime) {
   struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
   RETURN_STD(0, (u32)(t.tv_sec * 1000 + t.tv_nsec / 1000000));
 }
-API(w_mmioOpenA) { RETURN_STD(3, 0); }
-API(w_mmioClose) { RETURN_STD(2, 0); }
-API(w_mmioDescend) { RETURN_STD(4, 1); }
-API(w_mmioAscend) { RETURN_STD(3, 1); }
-API(w_mmioRead) { RETURN_STD(3, (u32)-1); }
-API(w_mmioGetInfo) { RETURN_STD(3, 1); }
-API(w_mmioAdvance) { RETURN_STD(3, 1); }
 
 /* WSOCK32: networking is not available */
 API(n_WSAStartup) { u32 p = ARG(1); memset(HP(p), 0, 400); M16(p) = ARG(0); M16(p + 2) = 0x0202; RETURN_STD(2, 0); }
@@ -170,10 +163,7 @@ static const ApiEntry list[] = {
   {"ole32.dll", "CoUninitialize", o_CoUninitialize}, {"ole32.dll", "CoFreeUnusedLibraries", o_CoFreeUnusedLibraries},
   {"ole32.dll", "CoTaskMemAlloc", o_CoTaskMemAlloc}, {"ole32.dll", "CoTaskMemFree", o_CoTaskMemFree},
   {"ole32.dll", "CoCreateInstance", o_CoCreateInstance},
-  {"WINMM.dll", "timeGetTime", w_timeGetTime}, {"WINMM.dll", "mmioOpenA", w_mmioOpenA},
-  {"WINMM.dll", "mmioClose", w_mmioClose}, {"WINMM.dll", "mmioDescend", w_mmioDescend},
-  {"WINMM.dll", "mmioAscend", w_mmioAscend}, {"WINMM.dll", "mmioRead", w_mmioRead},
-  {"WINMM.dll", "mmioGetInfo", w_mmioGetInfo}, {"WINMM.dll", "mmioAdvance", w_mmioAdvance},
+  {"WINMM.dll", "timeGetTime", w_timeGetTime}, /* mmio* live in mmio.c */
   {"WSOCK32.dll", "WSAStartup", n_WSAStartup}, {"WSOCK32.dll", "WSAGetLastError", n_WSAGetLastError},
   {"WSOCK32.dll", "socket", n_socket}, {"WSOCK32.dll", "closesocket", n_closesocket},
   {"WSOCK32.dll", "gethostname", n_gethostname}, {"WSOCK32.dll", "gethostbyname", n_gethostbyname},

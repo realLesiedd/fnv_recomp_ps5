@@ -307,10 +307,12 @@ static void *heartbeat(void *arg) {
       }
     }
     extern u64 g_stat_pad;
-    rt_log("heartbeat: %llu frames (+%llu), %llu file opens, %.1f MB read (+%.1f), %llu memory commits, %llu pad reads%s%s",
+    extern int dsound_voices(void);
+    rt_log("heartbeat: %llu frames (+%llu), %llu file opens, %.1f MB read (+%.1f), %llu memory commits, %llu pad reads, "
+           "%d sounds playing%s%s",
            (unsigned long long)fr, (unsigned long long)(fr - last_frames), (unsigned long long)g_stat_opens,
            rd / 1048576.0, (rd - last_read) / 1048576.0, (unsigned long long)g_stat_valloc, (unsigned long long)g_stat_pad,
-           stuck[0] ? "; waiting in" : "", stuck);
+           dsound_voices(), stuck[0] ? "; waiting in" : "", stuck);
     last_frames = fr; last_read = rd;
   }
   return NULL;

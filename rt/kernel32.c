@@ -408,6 +408,11 @@ API(k_SetEvent) {
   pthread_mutex_lock(&g_wait_lock); if (o) o->signaled = 1; sync_signal_all(); pthread_mutex_unlock(&g_wait_lock);
   RETURN_STD(1, o != NULL);
 }
+/* SetEvent for host code (DirectSound position notifications) */
+void rt_event_set(u32 h) {
+  HObj *o = h_get(h);
+  pthread_mutex_lock(&g_wait_lock); if (o && o->type == H_EVENT) o->signaled = 1; sync_signal_all(); pthread_mutex_unlock(&g_wait_lock);
+}
 API(k_ResetEvent) {
   HObj *o = h_get(ARG(0));
   pthread_mutex_lock(&g_wait_lock); if (o) o->signaled = 0; pthread_mutex_unlock(&g_wait_lock);

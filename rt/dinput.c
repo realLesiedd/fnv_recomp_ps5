@@ -1,4 +1,4 @@
-/* DirectInput8 and DirectSound: input devices that report nothing pressed; no audio device yet. */
+/* DirectInput8: keyboard and mouse devices fed by the platform layer. DirectSound lives in dsound.c. */
 #include "com.h"
 #include <string.h>
 
@@ -71,15 +71,7 @@ API(DirectInput8Create) {
   RETURN_STD(5, 0);
 }
 
-/* DirectSoundCreate8 (ordinal 11): no audio device yet */
-API(DirectSoundCreate8) {
-  rt_log("DirectSoundCreate8 -> DSERR_NODRIVER (audio not implemented yet)");
-  if (ARG(1)) M32(ARG(1)) = 0;
-  RETURN_STD(3, 0x88780078);
-}
-
 static const ApiEntry list[] = {
   {"DINPUT8.dll", "DirectInput8Create", DirectInput8Create},
-  {"DSOUND.dll", "#11", DirectSoundCreate8},
   {0}};
 void dinput_init(void) { api_register(list); }

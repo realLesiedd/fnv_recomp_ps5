@@ -11,3 +11,4 @@ void plat_keys(uint8_t keys[256]) { memset(keys, 0, 256); }
 void plat_mouse(int32_t *dx, int32_t *dy, int32_t *dz, uint8_t b[8]) { *dx = *dy = *dz = 0; memset(b, 0, 8); }
 void *plat_window(void) { return 0; }
 int plat_gpu_window(void) { return 0; }
+int plat_audio_open(PlatAudioFill fill) { (void)fill; return 0; }

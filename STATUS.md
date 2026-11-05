@@ -69,7 +69,16 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
 - **Continue/Load showing with no saves is vanilla.** The menu dims them when `Saves\*.fos` finds nothing, then
   `0x7CFD20` (called when the menu finishes fading in) sets both back to `_enabled = 1`, so the original exe shows them
   too.
-- Not yet: audio (DirectSound), Bink video playback.
+- **Main menu: Continue is left off until a save exists.** This is a deliberate change from the original exe
+  (`rt/hooks.c`), at the player's request.
+- **Audio** (tested on Linux, recorded with SDL's disk driver):
+  - DirectSound 8 mixer (`rt/dsound.c`): static, streaming, duplicate and 3D buffers, the listener and position
+    notifications. Output goes through SDL: PulseAudio/ALSA on Linux, `sceAudioOut` on PS5.
+  - `.wav` effects and UI sounds: WINMM mmio (`rt/mmio.c`) driving the game's own BSA reader.
+  - `.ogg` voices: libvorbisfile calls over stb_vorbis (`rt/vorbis.c`).
+  - `.mp3` music: DirectShow (`rt/dshow.c`) reads the track through the game's source filter and decodes it with
+    dr_mp3.
+- Not yet: Bink video playback (intro movies are skipped).
 
 ## GPU renderer (DXVK): working on Linux
 
