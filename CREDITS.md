@@ -31,7 +31,7 @@ Licenses for everything that ships in the PS5 app are listed in [THIRD_PARTY_NOT
 - **[ps5-payload-dev/sdk](https://github.com/ps5-payload-dev/sdk)** (John Törnblom and contributors): the payload
   SDK and toolchain.
 - **[ps5-payload-dev/SDL](https://github.com/ps5-payload-dev/SDL)** and **[pacbrew-repo](https://github.com/ps5-payload-dev/pacbrew-repo)**:
-  the PS5 SDL2 port (video output, DualSense, audio) and the prebuilt libraries. The platform layer follows its
+  the PS5 SDL2 port (video output, DualSense, audio) and PacBrew's prebuilt libraries. RADV is compiled from source by ps5-plume-triangle's `tools/build-radv.sh` at PS5_Mesa `0b2d6d1a61d9bbf89cf8beb88a696144f67c61f8`. The platform layer follows its
   `sceVideoOut` usage.
 - **[PS5_Mesa](https://github.com/mihawk-99/PS5_Mesa)**, **[PS5_Vulkan](https://github.com/mihawk-99/PS5_Vulkan)** and
   **[PS5_PayloadSDK](https://github.com/mihawk-99/PS5_PayloadSDK)** (mihawk-99): RADV on the PS5's GPU, the link
