@@ -154,6 +154,13 @@ Superseded as a plan. Written before the PS5 build played, and left as it was. A
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v39, diagnostics for silent first-person footsteps:** the owner hears no footsteps in first person on PS5
+  (grass and road, Goodsprings); third person works. On Linux with the owner's Goodsprings save, in first person
+  (player +0x64B, the flag the game's own 0x524D10 reads, was 0), walking starts pairs of 2D sounds every ~0.45 s at
+  full gain. PlayFootstepImpact (0x8391B0, fnv_decomp) was never called during that walk: it is now hooked only to
+  log (rt/hooks.c), and the first 800 one-shot sounds of a session are logged with the view, so the owner's log
+  shows what the console starts. Research handed to FNV HELPER (#16). Also in v39: per-core CPU load on PS5 from
+  the idle threads (#11, read only while the Detailed overlay is shown).
 - **v38, native maths for the hottest culling and transform routines:**
   - The owner's v37 PS5 profile (10 min, clean exit): in play the main thread was ~70% game code, ~13% port
     runtime (sync_state, the D3D9 front end, rt_call_ind ~2%), ~6% DXVK/driver, ~10% waiting; mostly 56-58.5 fps

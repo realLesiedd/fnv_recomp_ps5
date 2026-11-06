@@ -339,6 +339,7 @@ API(b_Lock) {
   if (n2) M32(n2) = n - first;
   RETURN_STD(8, DS_OK);
 }
+double g_snd_trace_until; /* hooks.c: log the sounds started just after a player footstep */
 API(b_Play) {
   pthread_mutex_lock(&g_mx);
   Buf *b = B(c);
@@ -348,12 +349,21 @@ API(b_Play) {
     b->looping = ARG(3) & DSBPLAY_LOOPING;
     static int dbg = -1;
     if (dbg < 0) dbg = getenv("FNV_AUDIO_DEBUG") && atoi(getenv("FNV_AUDIO_DEBUG")) >= 2;
-    if (dbg && !b->looping) { /* every one-shot sound: where it is (3D ones), and how loud */
+    struct timespec now_ts;
+    clock_gettime(CLOCK_MONOTONIC, &now_ts);
+    int traced = now_ts.tv_sec + now_ts.tv_nsec / 1e9 < g_snd_trace_until; /* just after a logged player footstep */
+    /* v39 diagnostic (first-person footsteps silent on PS5): the first 800 one-shot sounds of a session are logged,
+       with the view, so a short walk in each view shows what the game starts */
+    static int early;
+    if (!b->looping && early < 800) { early++; traced = 1; }
+    if ((dbg || traced) && !b->looping) { /* every one-shot sound: where it is (3D ones), and how loud */
       float gl, gr;
       gains(b, &gl, &gr);
+      u32 pc = M32(0x11DEA3C); /* the player; +0x64B is its third-person flag (the game's own check, 0x524D10) */
       rt_log("audio: play buf %d %u bytes vol %d mode %u p(%.0f,%.0f,%.0f) listener(%.0f,%.0f,%.0f) min %.0f max %.0f "
-             "flags %x gain %.3f/%.3f", (int)(b - g_buf), b->data ? b->data->bytes : 0, b->volume, b->mode, b->p[0], b->p[1],
-             b->p[2], g_lis.p[0], g_lis.p[1], g_lis.p[2], b->mind, b->maxd, b->flags, gl, gr);
+             "flags %x gain %.3f/%.3f %s person", (int)(b - g_buf), b->data ? b->data->bytes : 0, b->volume, b->mode, b->p[0],
+             b->p[1], b->p[2], g_lis.p[0], g_lis.p[1], g_lis.p[2], b->mind, b->maxd, b->flags, gl, gr,
+             !pc ? "no" : M8(pc + 0x64B) ? "third" : "first");
     }
   }
   pthread_mutex_unlock(&g_mx);

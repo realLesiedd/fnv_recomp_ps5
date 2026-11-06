@@ -1233,6 +1233,7 @@ HOOKS = {
     0x4B6160,  # Plane::Distance
     0x4B6100,  # bounding sphere against a plane (culling)
     0x49DA80,  # Plane::WhichSide (culling)
+    0x8391B0,  # PlayFootstepImpact: diagnostic log of the player's footsteps (rt/hooks.c), then the original
 }
 
 

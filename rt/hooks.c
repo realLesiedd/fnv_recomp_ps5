@@ -1,6 +1,7 @@
 /* Deliberate departures from the original exe. Each function here replaces one game function listed in
  * HOOKS in tools/recomp.py; the original stays callable as o_XXXXXXXX. */
 #include "rt.h"
+#include <time.h>
 #include <dirent.h>
 
 void o_007CBAF0(Ctx *restrict c);
@@ -113,4 +114,27 @@ void h_007D0BF0(Ctx *restrict c) {
   o_007D0BF0(c);
   rt_log("Exit Game chosen: closing the app");
   rt_exit(0);
+}
+
+/* Diagnostic, not a change: the player's footsteps (PlayFootstepImpact, cdecl actor, material). In first person
+   the game plays them as a 2D sound, in third person as a 3D sound at the feet. The owner hears none in first
+   person on PS5 while the Linux build plays them, so each of the first 30 player steps (then every 200th) is
+   logged with the view and surface, and the sounds started in the next 0.3 s are logged by dsound.c. */
+void o_008391B0(Ctx *restrict c);
+void h_008391B0(Ctx *restrict c) {
+  u32 actor = M32(c->r[4] + 4), material = M32(c->r[4] + 8), player = M32(0x11DEA3C);
+  static unsigned calls;
+  if (++calls == 1 || calls % 500 == 0) rt_log("footstep: %u footsteps so far (all actors)", calls);
+  if (actor && actor == player) {
+    static unsigned steps;
+    steps++;
+    if (steps <= 30 || steps % 200 == 0) {
+      extern double g_snd_trace_until;
+      struct timespec ts;
+      clock_gettime(CLOCK_MONOTONIC, &ts);
+      g_snd_trace_until = ts.tv_sec + ts.tv_nsec / 1e9 + 0.3;
+      rt_log("footstep: player step %u, %s person, material %u", steps, M8(player + 0x64B) ? "third" : "first", material);
+    }
+  }
+  o_008391B0(c);
 }
