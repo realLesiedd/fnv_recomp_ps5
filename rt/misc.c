@@ -164,6 +164,7 @@ API(x_XInputGetState) {
   PlatPad p; u32 packet; u32 st = ARG(1);
   g_stat_pad++;
   { extern void console_script(void); console_script(); } /* FNV_CONSOLE test commands, at the frame's input poll */
+  { extern void debug_menu_pump(void); debug_menu_pump(); } /* queued debug-menu lines (options.c); idle returns at once */
   if (!(ARG(0) == 0 && pad_script(&p, &packet)) && !plat_pad(ARG(0), &p, &packet)) RETURN_STD(2, 1167); /* ERROR_DEVICE_NOT_CONNECTED */
   if (ARG(0) == 0) { /* menu_press_hold; the packet number changes whenever the state it reports does */
     static u16 last_out; static u32 last_pk, extra;
