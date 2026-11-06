@@ -29,6 +29,7 @@
 #include <sys/resource.h>
 #ifdef __PROSPERO__
 #include <ps5platform/kernel.h>
+int sysctlbyname(const char *name, void *old, size_t *oldlen, const void *new_, size_t newlen); /* per-core load */
 /* temperatures: imported directly (v26-v28 looked them up at run time, which fails on the console, as it did for
    the pad's trigger functions); a call that is refused just leaves the reading out */
 int sceKernelGetCpuTemperature(int *temp);

@@ -150,6 +150,11 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v33:** the Back prompt (Wait) is the touchpad (the PS5 keeps the Create button for itself; the port maps the
+  touchpad click to Back); the temperature functions are imported directly (the run-time lookup fails on the console,
+  as it did for the pad's trigger functions). The user's v28 log of a long stand-still showed the main thread rising
+  from ~81% to 100% over 10-15 minutes with the scene unchanged (frames at ~1170 draws throughout), then dips to
+  43-47 fps; being reproduced on the Primm save.
 - **v32, prompts matched to a PS3 screenshot** (the barter menu, from the user): L1/R1 a rectangle about 4:3 with
   the name in bold filling it, a thinner outline (2.4); L2/R2 to match; the face symbols larger (about 55-60% of the
   arc's height, as on the PS3) and moved left to stay 2 pixels clear of the arc (its inner edge per cell, ARC in
