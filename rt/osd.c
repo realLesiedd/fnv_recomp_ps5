@@ -275,7 +275,7 @@ static void sample(double t, double span) {
   if (span > 0 && last_proc >= 0 && proc >= 0) S.total_pct = (int)(100 * (proc - last_proc) / span + 0.5);
   last_thr = thr; last_proc = proc;
   if (!S.cores) { long n = sysconf(_SC_NPROCESSORS_ONLN); S.cores = n > 0 ? (int)n : 8; }
-  S.ncores_seen = core_loads(S.core);
+  S.ncores_seen = g_osd_mode == 2 ? core_loads(S.core) : 0; /* only while the Detailed overlay shows the row */
   S.gpu = hb_gpu_load(&S.compiling);
   if (!hb_vram_mb(&S.vram_used, &S.vram_total)) S.vram_total = 0;
   S.ram_game = (unsigned)(g_guest_backed >> 20);
