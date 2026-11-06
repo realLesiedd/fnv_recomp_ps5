@@ -77,6 +77,28 @@ app=$out/$title
 rm -rf "$app"; mkdir -p "$app/sce_sys" "$app/sce_module" "$app/game" "$app/user"
 "$tool" self --sign --in "$out/eboot.elf" --out "$app/eboot.bin" --magic 0x1D3D154F
 cp "$root/ps5/sce_sys/param.json" "$app/sce_sys/"
+# The source param.json is left as it is. Only this copy is stamped.
+# contentVersion is NN.NNN.NNN (PSDevWiki's example is 01.000.000; SharpProspero checks
+# that shape and says to raise it for an update). FNV_RELEASE vN becomes 01.NNN.000.
+# masterVersion stays 01.00: that field is the compatibility baseline (NN.NN),
+# not the version of this build.
+rel=$(sed -nE 's/^#define[[:space:]]+FNV_RELEASE[[:space:]]+"v([0-9]{1,3})".*/\1/p' "$root/rt/main.c")
+case $rel in
+  [0-9]|[0-9][0-9]|[0-9][0-9][0-9]) ;;
+  *) echo "could not read FNV_RELEASE from $root/rt/main.c (expected \"v\" and 1 to 3 digits)" >&2; exit 2 ;;
+esac
+cv=$(printf '01.%03d.000' "$((10#$rel))")
+param=$app/sce_sys/param.json
+if ! grep -Eq '"contentVersion"[[:space:]]*:[[:space:]]*"[0-9]{2}\.[0-9]{3}\.[0-9]{3}"' "$param"; then
+  echo "packaged param.json has no contentVersion in NN.NNN.NNN form" >&2
+  exit 2
+fi
+sed -i -E 's/("contentVersion"[[:space:]]*:[[:space:]]*")[0-9]{2}\.[0-9]{3}\.[0-9]{3}"/\1'"$cv"'"/' "$param"
+if ! grep -Fq "\"contentVersion\": \"$cv\"" "$param"; then
+  echo "failed to write contentVersion $cv into $param" >&2
+  exit 2
+fi
+echo "contentVersion $cv (from FNV_RELEASE v$rel); masterVersion unchanged"
 cp "$root/ps5/sce_sys/icon0.png" "$app/sce_sys/"
 cp "$tri/runtime/libc.prx" "$app/sce_module/"
 cp "$root/LICENSE" "$root/THIRD_PARTY_NOTICES.md" "$root/README.md" "$app/"; cp -r "$root/LICENSES" "$app/"

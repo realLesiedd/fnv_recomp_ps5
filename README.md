@@ -78,8 +78,9 @@ The app checks the executable when it starts. If it's the wrong one, the app clo
 
 ## Installation
 
-1. Download `PPSA97701.zip` from the Releases page (not available yet). Unzip it and copy the `PPSA97701` folder to
-   `/data/homebrew/` on your PS5, for example over FTP.
+1. Download `PPSA97701-<version>.zip` from the Releases page (not available yet). The name ends with the version
+   from the first line of `fnv.log`, for example `PPSA97701-v39.zip`. Unzip it and copy the `PPSA97701` folder
+   to `/data/homebrew/` on your PS5, for example over FTP.
 2. Copy your game files into the app's `game` folder:
 
    ```
