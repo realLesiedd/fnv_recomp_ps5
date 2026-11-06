@@ -1,6 +1,6 @@
 # Working on this repository
 
-Rules for the AI assistants that work here (Claude, and FNV HELPER), and for anyone else who sends changes. The
+Rules for the AI assistants that work here (Claude, Codex and FNV HELPER), and for anyone else who sends changes. The
 owner decides anything this file doesn't cover. Read this, [STATUS.md](STATUS.md) and
 [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) before starting something new.
 
@@ -24,25 +24,27 @@ owner decides anything this file doesn't cover. Read this, [STATUS.md](STATUS.md
 |---|---|---|
 | **Owner** | Every decision, and merging | Tests on the PS5 and sends logs |
 | **Claude** | The runtime (`rt/`, except the files below), `CMakeLists.txt`, `ps5/` (build script, DXVK patch, packaging), `tools/recomp.py`, `tools/hot_gen_files.txt`, and the per-version notes in STATUS.md | Stability and performance work; all builds; reading the owner's logs; reviewing FNV HELPER's pull requests |
+| **Codex** | Claude's files and duties while Claude is away (see below) | Runs on the owner's own computer, so it can build there with the owner's executable without it leaving that machine |
 | **FNV HELPER** | "Future plans" in STATUS.md, `docs/OPEN_QUESTIONS.md`, `docs/research/`, `CHANGELOG.md`, `.github/` | Research, docs, release paperwork, and small code changes that Claude builds |
 
 To change a file the other assistant owns, ask in the issue first. Never edit the other assistant's branch.
 
-**While Claude is away** (the owner says when), FNV HELPER owns every file, Claude's included, and follows
-[docs/HANDOVER.md](docs/HANDOVER.md). The merge rule doesn't change: code is merged only after the owner has tested
-it on the PS5. When Claude is back, it reads the open issues and pull requests and STATUS.md before changing
-anything.
+**While Claude is away** (the owner says when), Codex takes Claude's row: the runtime, the recompiler, `ps5/`,
+builds, reading the owner's logs, and reviewing FNV HELPER's pull requests. Both follow
+[docs/HANDOVER.md](docs/HANDOVER.md). FNV HELPER keeps its own row, and asks Codex (in the issue) before changing
+Codex's files. The merge rule doesn't change: code is merged only after the owner has tested it on the PS5. When
+Claude is back, it reads the open issues and pull requests and STATUS.md before changing anything.
 `README.md` is shared: keep changes small, and say in the pull request what changed.
 
 ## How work moves
 
 1. **Handoff.** An issue titled `[Handoff] <task>`: what, why, which files, and how we'll know it's done. Work for
-   FNV HELPER also carries the label `fnv-helper`.
+   FNV HELPER carries the label `fnv-helper`, and work for Codex the label `codex`.
 2. **Pick-up.** A comment that it's been picked up, then the plan or the findings. Questions go in that thread.
 3. **Work.** On its own branch, in a pull request that links the issue.
 4. **Report on the pull request.** Post "done", "ready for review" and questions as comments on the pull request,
    not only on the issue. Claude is told about pull-request comments automatically, but not about issue comments.
-5. **Sign comments.** Start with "Claude here" or "FNV HELPER here".
+5. **Sign comments.** Start with "Claude here", "Codex here" or "FNV HELPER here".
 6. **Batch research.** Put several findings in one docs pull request, or in one comment, not one pull request each.
 
 ## Checking for work

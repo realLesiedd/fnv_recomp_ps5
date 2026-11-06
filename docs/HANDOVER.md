@@ -1,6 +1,7 @@
 # Handover: running the project without Claude
 
-Written by Claude for FNV HELPER, so the project can continue while Claude is unavailable. It covers what lives
+Written by Claude for Codex (who takes Claude's role, on the owner's own computer) and FNV HELPER, so the project
+can continue while Claude is unavailable. It covers what lives
 only in Claude's head: how to build, test, debug and ship a test build. [AGENTS.md](../AGENTS.md) has the rules,
 [STATUS.md](../STATUS.md) the history, and [BUILDING.md](BUILDING.md) and [ps5/README.md](../ps5/README.md) the
 basic build steps. Read those first.
@@ -15,6 +16,9 @@ build, and nothing new reaches the console.
 - The owner decides who may use it, and where. It is never committed, never uploaded anywhere public, never put in
   an issue or a pull request, and never passed on.
 - The same goes for the game's `Data/`, saves and any login. The owner's Steam login is never used by anyone.
+- Codex runs on the owner's own computer, so it can generate `gen/` and build there. The executable stays on that
+  machine. That's the preferred way to build while Claude is away. The toolchain needs Linux: on Windows, use WSL2
+  with Ubuntu 24.04.
 - If you can't build, you can still research, write code in pull requests and review. The owner then waits for a
   build until someone with the executable can make one.
 
@@ -152,6 +156,7 @@ These are in AGENTS.md. The ones that bite most:
 
 | # | Item | State |
 |---|---|---|
+| #23 | NPC faces render lilac-blue (v41, PS5) | Likely the face's colour texture is missing, so the normal map shows. First suspect: v36 forcing `bUseMultiThreadedFaceGen=0`. Check on Linux whether faces are blue there too, and ask the owner whether faces were normal before v36. |
 | #20 | Settings > Audio sliders barely change the sound | Research handed over. Likely also why first-person footsteps are hard to hear. |
 | #16 | First-person footsteps quiet | Explained by the v40 log: third person uses a loud 3D sound at the feet. First person uses a 2D sound the game sets to about −15 dB (−10 dB after the owner's slider change). Not lost. Revisit after #20. |
 | #14 | Release packaging | Picked up by FNV HELPER. |
