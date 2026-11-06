@@ -34,8 +34,8 @@ files.
 - **Native 4K.** Renders at 3840×2160 by default, with a Resolution option for 1080p, 1440p and 720p.
 - **Frame Rate Cap** of 30 or 60 FPS. It applies straight away and leaves the game's physics alone.
 - **Performance overlay** with three levels (off, basic, detailed). The detailed view has a frame-time graph,
-  1% lows, CPU load, GPU load, memory use and temperatures. Per-core load is included when the system reports it.
-  On PS5 that source (`kern.cp_times`) is not available, so the row is left out.
+  1% lows, CPU load, GPU load, memory use and temperatures. Per-core load is shown on Linux. The PS5 system
+  software doesn't report it, so on the console that row is hidden.
 - **DualSense support.**
   - PlayStation button prompts throughout the menus, HUD and Pip-Boy, drawn in the style of the PS3 version.
   - Adaptive triggers that react to the equipped weapon, with four strength levels.
@@ -48,7 +48,7 @@ files.
 
 | | Version |
 |---|---|
-| fnv_recomp | v36 (testing build) |
+| fnv_recomp | v41 (testing build) |
 | Fallout: New Vegas for PC | 1.4.0.525 |
 | PS5 system software | Tested on 13.42 |
 
@@ -79,7 +79,7 @@ The app checks the executable when it starts. If it's the wrong one, the app clo
 ## Installation
 
 1. Download `PPSA97701-<version>.zip` from the Releases page (not available yet). The name ends with the version
-   from the first line of `fnv.log`, for example `PPSA97701-v39.zip`. Unzip it and copy the `PPSA97701` folder
+   from the first line of `fnv.log`, for example `PPSA97701-v41.zip`. Unzip it and copy the `PPSA97701` folder
    to `/data/homebrew/` on your PS5, for example over FTP.
 2. Copy your game files into the app's `game` folder:
 
