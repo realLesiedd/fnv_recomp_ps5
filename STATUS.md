@@ -153,6 +153,12 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
 - **Next build (not built yet):** Trigger Strength spread out, since Light still felt strong: the scale on each
   weapon's Max strength is 0.15 / 0.3 / 0.55 / 1.0 (was 0.4 / 0.65 / 0.85 / 1.0), so a pistol's resistance is
   1 / 2 / 4 / 7 out of 8 for Light / Medium / Strong / Max.
+  The app now checks the player's FalloutNV.exe before running it (FNV-1a 64 of .text, and of .rdata+.data): the
+  Steam executable (encrypted) or another version stops with a clear line in fnv.log instead of crashing somewhere
+  random. Release preparation: README rewritten for players (requirements and versions, install, controls,
+  settings, known issues, FAQ), GPL-3.0-or-later LICENSE (the payload SDK and the app start-up code linked into
+  the app are GPL-3.0), THIRD_PARTY_NOTICES.md with LICENSES/, CREDITS.md corrected, developer build moved to
+  docs/BUILDING.md; the PS5 package now carries the license files.
 - **v34, menu presses no longer lost:** the start menu (main and pause menu, and its own Yes/No prompts such as
   "Continue from your last saved game?") ignores a click or Back that comes within 500 ms of its last action (its
   click handler 0x7CE9B0 and back handler 0x7CF5E0 compare GetTickCount with 0x11DAAB4). Found by tracing

@@ -343,22 +343,49 @@ u32 rt_teb_alloc(Ctx *c, u32 stack_lo, u32 stack_hi, u32 tid) {
 }
 
 /* ---- image ----------------------------------------------------------------- */
+/* The recompiled code only fits the executable it was generated from: FalloutNV.exe 1.4.0.525, the DRM-free
+   (GOG) build. Steam's copy is encrypted on disk and other versions differ, and either would crash somewhere
+   random, so the player's file is checked first. FNV-1a 64 of the code (.text) and of the data (.rdata, then .data). */
+#define EXE_TEXT_FNV 0x4a46dd932c58aa9dull
+#define EXE_DATA_FNV 0x85d5e71cbecaf051ull
+static u64 fnv1a64(const u8 *p, u64 n, u64 h) {
+  for (u64 i = 0; i < n; i++) h = (h ^ p[i]) * 0x100000001b3ull;
+  return h;
+}
 static void map_image(const char *exe) {
   int fd = open(exe, O_RDONLY);
-  if (fd < 0) { perror(exe); exit(2); }
+  if (fd < 0) {
+    rt_log("cannot open %s: the game folder needs FalloutNV.exe (1.4.0.525, the DRM-free GOG executable)", exe);
+    perror(exe); exit(2);
+  }
   struct stat st;
   fstat(fd, &st);
   u8 *file = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
   close(fd);
   /* headers */
   memcpy(HP(IMAGE_BASE), file, 0x1000);
+  u64 text = 0, data = 0xcbf29ce484222325ull;
   for (int i = 0; i < g_section_count; i++) {
     const ImageSection *s = &g_sections[i];
     u32 n = s->raw_size < s->vsize ? s->raw_size : s->vsize;
-    if (s->raw_off + n > (u64)st.st_size) { fprintf(stderr, "%s: truncated (section %s)\n", exe, s->name); exit(2); }
+    if (s->raw_off + n > (u64)st.st_size) {
+      rt_log("%s is not the executable this build needs (it is too short): use FalloutNV.exe 1.4.0.525, the DRM-free "
+             "GOG executable", exe);
+      exit(2);
+    }
     memcpy(HP(s->va), file + s->raw_off, n);
+    if (!strcmp(s->name, ".text")) text = fnv1a64(file + s->raw_off, n, 0xcbf29ce484222325ull);
+    if (!strcmp(s->name, ".rdata") || !strcmp(s->name, ".data")) data = fnv1a64(file + s->raw_off, n, data);
   }
   munmap(file, st.st_size);
+  if (text != EXE_TEXT_FNV) {
+    rt_log("FalloutNV.exe does not match: its code differs from the 1.4.0.525 DRM-free (GOG) executable this build "
+           "was made from. Steam's executable is encrypted and other versions differ; neither can run. Stopping.");
+    exit(2);
+  }
+  if (data != EXE_DATA_FNV) rt_log("FalloutNV.exe: the code matches 1.4.0.525, but its data differs from the expected "
+                                   "executable; continuing, report problems with this log");
+  else rt_log("FalloutNV.exe: 1.4.0.525 DRM-free executable recognised");
 }
 
 static void stub_missing(Ctx *c) {

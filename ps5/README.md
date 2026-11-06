@@ -21,12 +21,15 @@ The app is `PPSA97701`, "Fallout: New Vegas (recomp)". It combines four parts:
          -Denable_dxgi=false -Denable_d3d8=false -Denable_d3d10=false -Denable_d3d11=false
        ninja -C build.ps5
 
-3. Generate `gen/` from your own exe (see the top-level README), then run
+3. Generate `gen/` from your own exe (see [docs/BUILDING.md](../docs/BUILDING.md)), then run
    `ps5/build.sh <ps5-plume-triangle> <dxvk>`.
 
 ## Install
 
 1. Copy `build-ps5/PPSA97701` to `/data/homebrew/PPSA97701` on the PS5.
-2. Copy your New Vegas folder into `/data/homebrew/PPSA97701/game/`. It needs `FalloutNV.exe` (1.4.0.525, plain
-   code), `Data/`, `Fallout_default.ini` and the preset INIs.
+2. Copy your New Vegas folder into `/data/homebrew/PPSA97701/game/`. It needs `FalloutNV.exe` (1.4.0.525, the
+   DRM-free GOG executable; the app checks it at start-up), `Data/`, `Fallout_default.ini` and the preset INIs.
 3. Launch the app. Settings and saves go to `user/`, and the log to `fnv.log` (DXVK writes its own log there too).
+
+The app folder also gets `LICENSE`, `THIRD_PARTY_NOTICES.md`, `LICENSES/` and `README.md`, so a shared build carries
+its license notices.
