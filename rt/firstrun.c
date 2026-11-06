@@ -98,6 +98,7 @@ static const struct { const char *key, *def; } g_own[] = {
   {"iFastMath", "1"},          /* native versions of the game's hottest maths routines: 0 runs the originals (fastmath.c) */
   {"iProfiler", "1"},          /* main-thread profile in fnv.log once a minute: 0 off (prof.c) */
   {"bDebugMenu", "0"},         /* debug rows in Settings > Controls: 0 hidden, 1 shown (options.c) */
+  {"bAudioVolumeLog", "0"},    /* log each non-primary SetVolume change: 0 off, 1 on (dsound.c) */
 };
 
 static void prefs_path(char *out, size_t n) {
