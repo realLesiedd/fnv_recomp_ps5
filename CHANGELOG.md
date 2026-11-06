@@ -2,6 +2,31 @@
 
 What changed in each version, for players. The newest version is at the top. This starts at v22, when the PlayStation button prompts started working. Developer notes, including older versions, are in [STATUS.md](STATUS.md).
 
+## v41
+
+- A hidden debug menu is in testing. It has not been tried on the PS5 yet. It stays off unless `FalloutPrefs.ini` has `bDebugMenu=1` under `[fnv_recomp]`. Settings > Controls then adds rows to pick a place and go there, give a test kit, and turn god mode and noclip on or off.
+- Release packaging is in testing. It has not been tried on the PS5 yet. The home screen version follows the build name. This build shows 01.041.000, and the zip is named `PPSA97701-v41.zip`.
+- A v40 log shows why first-person footsteps are hard to hear. First person uses a quieter flat sound. Third person uses a louder sound at your feet. The audio sliders barely change the quieter sound.
+
+## v40
+
+- The log now follows each recorded sound until it ends. On a desktop test, the first-person footsteps play through.
+- On PS5 system software 13.42 the console does not report per-core load, so that overlay row stays hidden. Linux still shows it.
+
+## v39
+
+- First-person footsteps are hard to hear on the PS5. Third person is fine. This version records the sounds the game starts, and which view you are in.
+- The detailed performance overlay reads each core's load on the PS5, and only while that view is shown.
+
+## v38
+
+- The busiest maths for what you can see, and for moving things, now runs as native code. A check of 30 million calls matched the old results. `iFastMath=0` under `[fnv_recomp]` in `FalloutPrefs.ini` runs the old code.
+- The log lists the picture modes the TV offers. The port still picks 4K near 60 Hz when a 120 Hz mode is listed. The frame cap stays at 60.
+
+## v37
+
+- v36 could close about a minute into play on the PS5. The new performance summary in the log caused it. This version fixes that crash.
+
 ## v36
 
 - Loading a save could hang, including Continue. The game's multi-threaded face creation was the link in that hang. The port now turns that off every time it starts, and the same save then loaded. A button tap during a hitch is kept until the game has read it, so a short press is not lost.

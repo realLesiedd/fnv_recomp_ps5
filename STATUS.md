@@ -2,6 +2,28 @@
 
 Later notes override earlier ones where they disagree. Three early plan lists are marked as of v35: [Next, in order](#next-in-order), the [roadmap](#roadmap-the-players-goals-in-order), and [Next for PS5](#gpu-renderer-dxvk-working-on-linux) under the GPU renderer. [Future plans](#future-plans) is the list to work from. Questions this tree does not answer are in [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md).
 
+## Release checklist
+
+[docs/HANDOVER.md](docs/HANDOVER.md) section 9 points here.
+
+**Done**
+- The player README.
+- LICENSE, THIRD_PARTY_NOTICES and CREDITS packaged.
+- contentVersion stamped from `FNV_RELEASE`, `tools/package_release.sh`, and the zip name (#14, in code; PS5 check open).
+
+**Open**
+- v41 PS5 test of the debug menu (#15) and packaging (#14), on #19.
+- Long play sessions. A public GitHub Release.
+- #20 audio sliders. #16 footsteps. Known issues re-checked.
+- PC saves loading both ways (unconfirmed). Dust and smoke hard edges (cause unknown).
+- #12 mods and #13 trophies (not needed for the first release).
+
+**Blocked**
+- #4 120 Hz (needs a RADV rebuild).
+- #3 per-core CPU (13.42 refuses it; the issue is closed).
+- Two or three outside testers (the owner has to find them).
+- The message to fnv_decomp (the owner sends it).
+
 ## Working (tested with the GOG FalloutNV.exe 1.4.0.525)
 
 - **Recompiler.** Finds 87,340 functions (3.73M instructions) and emits C for them. 209 instruction sites are not
