@@ -10,7 +10,8 @@ The Pip-Boy arm's printed trigger tags (LT/RT on the arm model's texture) are re
 lettering as 8-bit coverage masks (a byte each for width and height, then the rows) that rt/glyphs.c paints over the
 erased tags.
 
-Usage: make_glyphs.py ASSETS_DIR   (writes ASSETS_DIR/internal/atlas_glyphs/*.dxt5, ASSETS_DIR/internal/arm_labels/*.a8)
+Usage: make_glyphs.py ASSETS_DIR
+  (writes ASSETS_DIR/internal/atlas_glyphs/<size>/*.dxt5, ASSETS_DIR/internal/arm_labels/*.a8)
 Needs Pillow and DejaVu Sans Bold (fonts-dejavu-core)."""
 import os, struct, sys
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -18,8 +19,9 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 SS = 4                      # supersampling
 FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 W = 6                       # stroke width at 64 px
-SCALE = 0.8                 # every glyph drawn at this size about the cell's centre: the game shows the cells large,
-                            # and at full size the symbols stood well above the text beside them
+SIZES = (50, 60, 70, 80, 100)  # each glyph set is drawn at these sizes (percent, about the cell's centre); the player
+                               # picks one with iButtonPromptSize in FalloutPrefs.ini [fnv_recomp] (rt/glyphs.c)
+LABELLED = {'lb', 'rb', 'lt', 'rt', 'ls', 'rs'}  # drawn 15% larger than the rest so their lettering stays readable
 
 
 def canvas(n=64):
@@ -61,7 +63,7 @@ def shoulder(label):
     """L1/R1: a bumper outline with its name"""
     im = canvas(); d = ImageDraw.Draw(im)
     d.rounded_rectangle([s(12), s(20), s(52), s(44)], radius=s(8), outline=255, width=s(4))
-    text(d, 32, 32.5, label, 15)
+    text(d, 32, 32.5, label, 17)
     return im
 
 
@@ -69,15 +71,15 @@ def trigger(label):
     """L2/R2: a trigger outline (taller, rounded top) with its name"""
     im = canvas(); d = ImageDraw.Draw(im)
     d.rounded_rectangle([s(17), s(13), s(47), s(51)], radius=s(12), outline=255, width=s(4))
-    text(d, 32, 34, label, 14)
+    text(d, 32, 33.5, label, 15.5)
     return im
 
 
 def stick(label):
     """L3/R3: a stick (ring) with its name"""
     im = canvas(); d = ImageDraw.Draw(im)
-    ring(d, 32, 31.5, 15, 3.5)
-    text(d, 32, 32.5, label, 11.5)
+    ring(d, 32, 31.5, 15.5, 3.5)
+    text(d, 32, 32.5, label, 13)
     return im
 
 
@@ -114,10 +116,11 @@ GLYPHS = {
 }
 
 
-def finish(alpha, size, glow):
-    """downsample the supersampled alpha; white glyph, optionally over a soft glow (the selected look)"""
+def finish(alpha, size, glow, scale):
+    """downsample the supersampled alpha, drawn at scale about the centre; white glyph, optionally over a soft glow
+    (the selected look)"""
     n = alpha.size[0]
-    m = int(round(n * SCALE))
+    m = int(round(n * scale))
     small = Image.new('L', (n, n), 0)
     small.paste(alpha.resize((m, m), Image.BOX), ((n - m) // 2, (n - m) // 2))
     a = small.resize((size, size), Image.BOX)
@@ -184,15 +187,18 @@ def arm_label(path, label, w, h):
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else 'assets'
-    cells = os.path.join(root, 'internal', 'atlas_glyphs')
-    os.makedirs(cells, exist_ok=True)
     alpha = {k: fn() for k, fn in GLYPHS.items()}
     n = 0
-    for k in ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'ls', 'rs', 'up']:
-        write_atlas_cell(os.path.join(cells, 'general_button_%s.dxt5' % k), finish(alpha[k], 64, False)); n += 1
-    for k in ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'ls', 'rs', 'up', 'start', 'back']:
-        write_atlas_cell(os.path.join(cells, 'glow_general_button_%s.dxt5' % k), finish(alpha[k], 64, True)); n += 1
-    print('wrote', n, 'atlas cells to', cells)
+    for pct in SIZES:
+        cells = os.path.join(root, 'internal', 'atlas_glyphs', str(pct))
+        os.makedirs(cells, exist_ok=True)
+        for glow, keys in ((False, ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'ls', 'rs', 'up']),
+                           (True, ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'ls', 'rs', 'up', 'start', 'back'])):
+            for k in keys:
+                scale = min(1.0, pct / 100 * (1.15 if k in LABELLED else 1.0))
+                name = ('glow_' if glow else '') + 'general_button_' + k
+                write_atlas_cell(os.path.join(cells, name + '.dxt5'), finish(alpha[k], 64, glow, scale)); n += 1
+    print('wrote', n, 'atlas cells in', len(SIZES), 'sizes')
     labels = os.path.join(root, 'internal', 'arm_labels')
     os.makedirs(labels, exist_ok=True)
     arm_label(os.path.join(labels, 'l2.a8'), 'L2', 20, 13)  # box sizes: rt/glyphs.c g_tags

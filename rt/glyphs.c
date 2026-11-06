@@ -3,7 +3,8 @@
  * that is why the separate general_button_*.dds files are never read). When the game uploads that atlas, it is
  * recognised (its first bytes, then an FNV-1a 64 fingerprint of the player's own copy) and the 22 button cells are
  * overwritten, mipmaps included, with the drawings from tools/make_glyphs.py, built into the executable as DXT5
- * blocks. Nothing in the player's files changes, and any other atlas is left alone.
+ * blocks, in five sizes; iButtonPromptSize in FalloutPrefs.ini [fnv_recomp] picks one (percent: 50, 60, 70, 80 or
+ * 100; 60 by default). Nothing in the player's game files changes, and any other atlas is left alone.
  *
  * The Pip-Boy arm has the main-tab buttons printed on it, LT and RT (textures\\pipboy3000\\
  * pipboyarm01.dds and the Xbox copies, 1024x1024 DXT1). On the DualSense those are L2 and R2: when that texture is
@@ -59,13 +60,19 @@ static const EmbeddedAsset *asset(const char *path) {
   return NULL;
 }
 
+int rt_setting_int(const char *key, int def); /* firstrun.c */
+
 static void atlas_patch(Obj *o) {
   if (memcmp(HP(o->data[0][0]), g_atlas_head, sizeof g_atlas_head)) return; /* cheap test first */
   if (fnv1a64(HP(o->data[0][0]), 1024u * 1024u) != ATLAS_HASH) return;
+  static const int sizes[] = {50, 60, 70, 80, 100}; /* the sets tools/make_glyphs.py draws */
+  int want = rt_setting_int("iButtonPromptSize", 60), pct = sizes[0];
+  for (unsigned i = 0; i < sizeof sizes / sizeof *sizes; i++) /* the nearest set */
+    if (abs(sizes[i] - want) < abs(pct - want)) pct = sizes[i];
   int done = 0;
   for (unsigned i = 0; i < sizeof g_cells / sizeof *g_cells; i++) {
     char path[128];
-    snprintf(path, sizeof path, "internal/atlas_glyphs/%s.dxt5", g_cells[i].name);
+    snprintf(path, sizeof path, "internal/atlas_glyphs/%d/%s.dxt5", pct, g_cells[i].name);
     const EmbeddedAsset *a = asset(path);
     if (!a) continue;
     const u8 *src = a->data;
@@ -80,7 +87,7 @@ static void atlas_patch(Obj *o) {
     }
     done++;
   }
-  rt_log("button prompts: %d PlayStation glyphs written into the UI atlas", done);
+  rt_log("button prompts: %d PlayStation glyphs written into the UI atlas (size %d%%)", done, pct);
 }
 
 /* ---- the Pip-Boy arm's LT/RT tags ---- */

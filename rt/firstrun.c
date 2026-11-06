@@ -85,6 +85,48 @@ static char *quality(char *b, const char *game_dir) {
   return b;
 }
 
+/* The port's own settings, in FalloutPrefs.ini [fnv_recomp] (the game ignores the section). Each is written with
+   its default when missing, so it can be found and changed there. */
+static const struct { const char *key, *def; } g_own[] = {
+  {"iButtonPromptSize", "60"}, /* size of the PlayStation button prompts, percent: 50, 60, 70, 80 or 100 (glyphs.c) */
+};
+
+static void prefs_path(char *out, size_t n) {
+  snprintf(out, n, "%s/Documents/My Games/FalloutNV/FalloutPrefs.ini", g_user_dir);
+}
+
+/* an integer setting from [fnv_recomp], or def */
+int rt_setting_int(const char *key, int def) {
+  char path[1200]; long n;
+  prefs_path(path, sizeof path);
+  char *b = slurp(path, &n);
+  if (!b) return def;
+  int v = def;
+  char *sec = rt_strcasestr(b, "[fnv_recomp]");
+  if (sec) {
+    char *end = strchr(sec + 1, '['); if (!end) end = b + n;
+    size_t kl = strlen(key);
+    for (char *p = strchr(sec, '\n'); p && p < end; p = strchr(p + 1, '\n'))
+      if (!strncasecmp(p + 1, key, kl) && p[1 + kl] == '=') { v = atoi(p + 2 + kl); break; }
+  }
+  free(b);
+  return v;
+}
+
+static void own_settings(void) {
+  char path[1200]; long n;
+  prefs_path(path, sizeof path);
+  char *b = slurp(path, &n);
+  if (!b) return;
+  int changed = 0;
+  for (unsigned i = 0; i < sizeof g_own / sizeof *g_own; i++) {
+    char k[128]; snprintf(k, sizeof k, "%s=", g_own[i].key);
+    if (!rt_strcasestr(b, k)) { b = ini_set(b, "fnv_recomp", g_own[i].key, g_own[i].def); changed = 1; }
+  }
+  if (changed) { FILE *f = fopen(path, "wb"); if (f) { fputs(b, f); fclose(f); } }
+  free(b);
+}
+
 void rt_first_run(void) {
   char dir[1100], ini[1200], prefs[1200], src[1200];
   snprintf(dir, sizeof dir, "%s/Documents/My Games/FalloutNV", g_user_dir);
@@ -121,4 +163,5 @@ void rt_first_run(void) {
     }
     free(b);
   }
+  own_settings();
 }
