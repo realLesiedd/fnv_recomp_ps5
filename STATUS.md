@@ -159,6 +159,15 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   settings, known issues, FAQ), GPL-3.0-or-later LICENSE (the payload SDK and the app start-up code linked into
   the app are GPL-3.0), THIRD_PARTY_NOTICES.md with LICENSES/, CREDITS.md corrected, developer build moved to
   docs/BUILDING.md; the PS5 package now carries the license files.
+  The performance overlay is off by default on new installs (existing settings are kept), and the app has an
+  original icon (tools/make_icon.py: a Mojave highway at dusk, no game artwork).
+  The user's v34 log (44 min, mostly standing still) explains the stand-still slowdown: no leak (game RAM, D3D
+  objects and VRAM flat throughout). The frame rate follows the scene's draw calls, which swing between ~800 and
+  ~2,200 per frame on a ~54 s loop, almost certainly the game's idle camera (fVanityModeDelay) circling the player:
+  ~1,000 draws holds 60 fps, ~2,200 drops to 45 with the main thread at 100%. The 6-minute pattern was that loop
+  seen through one-minute samples. So busy views are bound by main-thread cost per draw call; that is the
+  performance work to do. The overlay's per-core row is empty on the console (kern.cp_times is not available
+  there). The menu fix held 16 quick presses in that session and delivered all of them.
 - **v34, menu presses no longer lost:** the start menu (main and pause menu, and its own Yes/No prompts such as
   "Continue from your last saved game?") ignores a click or Back that comes within 500 ms of its last action (its
   click handler 0x7CE9B0 and back handler 0x7CF5E0 compare GetTickCount with 0x11DAAB4). Found by tracing

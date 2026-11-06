@@ -59,7 +59,7 @@ static double now_s(void) {
 }
 
 void osd_init(void) {
-  g_osd_mode = rt_setting_int("iPerfOverlay", 2);
+  g_osd_mode = rt_setting_int("iPerfOverlay", 0); /* off unless chosen in Settings > Display */
   g_frame_cap = rt_setting_int("iFrameCap", 60);
   if (g_osd_mode < 0 || g_osd_mode > 2) g_osd_mode = 2;
   if (g_frame_cap != 30) g_frame_cap = 60;

@@ -61,6 +61,8 @@ Licenses for everything that ships in the PS5 app are listed in [THIRD_PARTY_NOT
 - **[DejaVu Fonts](https://dejavu-fonts.github.io/)**: DejaVu Sans Bold letters the L1/R1/L2/R2/L3/R3 prompts
   drawn by `tools/make_glyphs.py`, and DejaVu Sans Mono Bold is the performance overlay's font
   (`tools/make_osd_font.py`).
+- The app icon (`ps5/sce_sys/icon0.png`, drawn by `tools/make_icon.py`) is original artwork made for this project,
+  lettered in DejaVu Sans Bold. It uses no artwork or logo from the game.
 - The PlayStation-style button prompts in `assets/` are original drawings made for this project in the style of the
   PS3 version's prompts. They are not Sony artwork.
 

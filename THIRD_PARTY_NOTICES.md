@@ -22,7 +22,7 @@ data belong to their owners. No game files are included anywhere in this project
 | GNU libiconv | 1.17, PacBrew package | Character set conversion, linked by SDL2 | LGPL-2.1-or-later | https://www.gnu.org/software/libiconv/ |
 | stb_vorbis (Sean Barrett and contributors) | 1.22, in `third_party/` | Ogg Vorbis decoding | Public domain or MIT | https://github.com/nothings/stb |
 | dr_mp3 (David Reid; based on minimp3 by lieff) | in `third_party/` | MP3 decoding | Public domain (Unlicense) or MIT-0 | https://github.com/mackron/dr_libs |
-| DejaVu Sans Bold and DejaVu Sans Mono Bold (Bitstream, Inc.; DejaVu changes public domain) | fonts-dejavu-core | Rendered into the overlay font (`assets/internal/osd_font.a8`) and the L1/R1/L2/R2/L3/R3 button labels | Bitstream Vera license, see `LICENSES/Bitstream-Vera.txt` | https://dejavu-fonts.github.io/ |
+| DejaVu Sans Bold and DejaVu Sans Mono Bold (Bitstream, Inc.; DejaVu changes public domain) | fonts-dejavu-core | Rendered into the overlay font (`assets/internal/osd_font.a8`), the L1/R1/L2/R2/L3/R3 button labels and the app icon's lettering | Bitstream Vera license, see `LICENSES/Bitstream-Vera.txt` | https://dejavu-fonts.github.io/ |
 
 The packages from PacBrew are built by the recipes at https://github.com/ps5-payload-dev/pacbrew-repo.
 
