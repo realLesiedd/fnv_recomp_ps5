@@ -177,3 +177,57 @@ void ds_frame(void) {
     sent = 1;
   }
 }
+
+/* ---- test hook: FNV_CONSOLE="140:player.moveto X;150:save Name" runs console commands at the given seconds after
+   start, on the main thread at the frame's input poll (XInputGetState; inside Present a teleport deadlocks), the
+   way the console does (0x71B210): a temporary Script (constructor 0x5AA0F0, then
+   0x484490), its text (0x5ABE50), compiled and run by Script::CompileAndRun (0x5AC400) with the console manager's
+   compiler (ConsoleManager 0x71B160, its first field) as the console (context 1), no reference selected, then
+   destroyed (0x5AA1A0). Used to make test saves (a teleport, a level, a save) where typing would be slow. */
+static void console_line(Ctx *c, const char *line) {
+  u32 zero = 0;
+  u32 cm = rt_call_guest(c, 0x71B160u, 1, &zero);
+  if (!cm || !M32(cm)) { rt_log("console: no console manager yet"); return; }
+  u32 script = heap_alloc(0x100, 1), text = guest_strdup(line);
+  c->r[1] = script; rt_call_guest(c, 0x5AA0F0u, 0, NULL);
+  c->r[1] = script; rt_call_guest(c, 0x484490u, 0, NULL);
+  c->r[1] = script; rt_call_guest(c, 0x5ABE50u, 1, &text);
+  u32 args[3] = {M32(cm), 1, 0};
+  c->r[1] = script;
+  u32 ok = rt_call_guest(c, 0x5AC400u, 3, args) & 0xFF;
+  c->r[1] = script; rt_call_guest(c, 0x5AA1A0u, 0, NULL);
+  heap_free(text);
+  heap_free(script);
+  rt_log("console: %s (%s)", line, ok ? "ran" : "returned 0");
+}
+
+void console_script(void) {
+  static int n = -1, next;
+  static struct { double t; char cmd[200]; } ev[32];
+  if (n < 0) {
+    n = 0;
+    const char *e = getenv("FNV_CONSOLE");
+    while (e && *e && n < 32) {
+      char *end;
+      ev[n].t = strtod(e, &end);
+      if (*end != ':') break;
+      e = end + 1;
+      int k = 0;
+      while (*e && *e != ';' && k < 199) ev[n].cmd[k++] = *e++;
+      ev[n].cmd[k] = 0;
+      n++;
+      if (*e == ';') e++;
+    }
+  }
+  if (next >= n) return;
+  Ctx *c = rt_current();
+  if (!c || c->thread_index != 0) return;
+  static double t0;
+  double t = now_s();
+  if (!t0) t0 = t;
+  if (t - t0 < ev[next].t) return;
+  u32 eax = c->r[0], ecx = c->r[1], edx = c->r[2];
+  console_line(c, ev[next].cmd);
+  c->r[0] = eax; c->r[1] = ecx; c->r[2] = edx;
+  next++;
+}

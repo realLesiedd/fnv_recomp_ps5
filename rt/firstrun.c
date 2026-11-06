@@ -90,7 +90,6 @@ static char *quality(char *b, const char *game_dir) {
 /* The port's own settings, in FalloutPrefs.ini [fnv_recomp] (the game ignores the section). Each is written with
    its default when missing, so it can be found and changed there. */
 static const struct { const char *key, *def; } g_own[] = {
-  {"iButtonPromptSize", "60"}, /* size of the PlayStation button prompts, percent: 50, 60, 70, 80 or 100 (glyphs.c) */
   {"iPerfOverlay", "2"},       /* performance overlay: 0 off, 1 basic, 2 detailed (osd.c; Settings > Display) */
   {"iFrameCap", "60"},         /* frame-rate cap: 30 or 60 (osd.c; Settings > Display) */
   {"iAdaptiveTriggers", "1"},  /* DualSense adaptive triggers: 0 off, 1 on (dualsense.c; Settings > Controls) */

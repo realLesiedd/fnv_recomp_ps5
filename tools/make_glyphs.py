@@ -1,202 +1,96 @@
 #!/usr/bin/env python3
-"""Draws the PlayStation-style button prompts that replace the game's Xbox 360 ones.
+"""Draws the PlayStation button symbols that replace the letters of the game's Xbox 360 prompts.
 
-Original drawings (geometric shapes and DejaVu Sans Bold lettering) in the style of the console's monochrome
-prompts: solid buttons with the symbol or name cut out, soft-edged. The game draws its prompts from 64x64 cells of
-its UI atlas (textures\\interface\\interfaceshared0.dds, 1024x1024 DXT5); these are written as DXT5 blocks for those
-cells and their mipmaps, built into the executable (tools/embed_assets.py), and rt/glyphs.c writes them into the
-atlas when the game uploads it. White on transparent: the menus tint them.
+The PS3 version drew its prompts in the same art as the Xbox ones the PC files carry (a thin symbol, and for the face
+buttons the arc of a raised button beside it: "✕)" where the Xbox has "A)"), only with the PlayStation symbols. So
+the port keeps the game's own icons and replaces only their letters, when the game uploads its UI atlas
+(textures\\interface\\interfaceshared0.dds, 1024x1024 DXT5, cells laid out by interfaceshared.tai): rt/glyphs.c
+splits each 64x64 cell into its pieces, keeps the main shape (the arc, the bumper or trigger outline, the stick, the
+circle), erases the letters and the glow around them, and lays in what this tool draws: ✕ ○ □ △ for the face
+buttons, L1/R1, L2/R2, L3/R3 for the shoulders, triggers and sticks, and the DualSense's Options and Create marks for
+Start and Back. Nothing of the game's art is stored here: only the letter boxes (where the letters sit in each cell)
+and our own drawings.
+
+Each cell file (internal/ps3_cells/<name>.cell): u8 1 if the cell is a highlighted (glowing) one, then the body
+coverage (64x64 bytes) and, for highlighted cells, the glow coverage (64x64 bytes).
 
 The Pip-Boy arm's printed trigger tags (LT/RT on the arm model's texture) are relabelled L2/R2: arm_label writes the
 lettering as 8-bit coverage masks (a byte each for width and height, then the rows) that rt/glyphs.c paints over the
 erased tags.
 
-Usage: make_glyphs.py ASSETS_DIR
-  (writes ASSETS_DIR/internal/atlas_glyphs/<size>/*.dxt5, ASSETS_DIR/internal/arm_labels/*.a8)
+Usage: make_glyphs.py ASSETS_DIR   (writes ASSETS_DIR/internal/ps3_cells/*.cell, ASSETS_DIR/internal/arm_labels/*.a8)
 Needs Pillow and DejaVu Sans Bold (fonts-dejavu-core)."""
-import os, struct, sys
+import os, sys
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-SS = 4                      # supersampling
 FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
-W = 6                       # stroke width at 64 px
-SIZES = (50, 60, 70, 80, 100)  # each glyph set is drawn at these sizes (percent, about the cell's centre); the player
-                               # picks one with iButtonPromptSize in FalloutPrefs.ini [fnv_recomp] (rt/glyphs.c)
-LABELLED = {'lb', 'rb', 'lt', 'rt', 'ls', 'rs'}  # drawn 10% larger than the rest so their lettering stays readable
+SS = 8      # supersampling
+SW = 3.1    # stroke width: the game's own lettering
 
-
-def canvas(n=64):
-    return Image.new('L', (n * SS, n * SS), 0)
-
-
-def s(v):
-    return int(round(v * SS))
-
-
-def ring(d, cx, cy, r, w=W, fill=255):
-    d.ellipse([s(cx - r), s(cy - r), s(cx + r), s(cy + r)], outline=fill, width=s(w))
-
-
-def disc(d, cx, cy, r, fill=255):
-    d.ellipse([s(cx - r), s(cy - r), s(cx + r), s(cy + r)], fill=fill)
-
-
-def text(d, cx, cy, t, size, fill=255):
-    f = ImageFont.truetype(FONT, s(size))
-    d.text((s(cx), s(cy)), t, font=f, fill=fill, anchor='mm')
-
-
-# The look of the console's own monochrome prompts: each button a solid shape with its symbol or name cut out of
-# it (the menus tint the shape), soft-edged so it stays smooth when the game draws it large on a 4K picture.
-CX, CY = 32, 31.5
-
-
-def face(symbol):
-    """a face button: a solid disc with the symbol cut out"""
-    im = canvas(); d = ImageDraw.Draw(im)
-    disc(d, CX, CY, 19.5)
-    if symbol == 'cross':
-        k = 7.6
-        d.line([s(CX - k), s(CY - k), s(CX + k), s(CY + k)], fill=0, width=s(4.6))
-        d.line([s(CX - k), s(CY + k), s(CX + k), s(CY - k)], fill=0, width=s(4.6))
-    elif symbol == 'circle':
-        ring(d, CX, CY, 8.4, 4.4, fill=0)
-    elif symbol == 'square':
-        k = 7.6
-        d.rectangle([s(CX - k), s(CY - k), s(CX + k), s(CY + k)], outline=0, width=s(4.1))
-    elif symbol == 'triangle':
-        d.polygon([(s(CX), s(CY - 10.5)), (s(CX + 10.2), s(CY + 7)), (s(CX - 10.2), s(CY + 7))], outline=0, width=s(4.1))
-    return im
-
-
-def shoulder(label):
-    """L1/R1: a solid bumper (wide, low, rounded) with its name cut out"""
-    im = canvas(); d = ImageDraw.Draw(im)
-    d.rounded_rectangle([s(11), s(19.5), s(53), s(44.5)], radius=s(9), fill=255)
-    text(d, CX, CY + 0.5, label, 17.5, fill=0)
-    return im
-
-
-def trigger(label):
-    """L2/R2: a solid trigger (rounded top, squarer bottom) with its name cut out"""
-    im = canvas(); d = ImageDraw.Draw(im)
-    d.rounded_rectangle([s(15), s(12), s(49), s(51)], radius=s(14.5), fill=255, corners=(True, True, False, False))
-    d.rounded_rectangle([s(15), s(30), s(49), s(51)], radius=s(5.5), fill=255)
-    text(d, CX, CY + 3, label, 16.5, fill=0)
-    return im
-
-
-def stick(label):
-    """L3/R3: a solid stick top with its name cut out"""
-    im = canvas(); d = ImageDraw.Draw(im)
-    disc(d, CX, CY, 19.5)
-    text(d, CX, CY + 0.5, label, 14.5, fill=0)
-    return im
-
-
-def options():
-    """Options: a solid upright pill with three lines cut out"""
-    im = canvas(); d = ImageDraw.Draw(im)
-    d.rounded_rectangle([s(19), s(11), s(45), s(52)], radius=s(13), fill=255)
-    for y in (24, 31.5, 39):
-        d.line([s(25.5), s(y), s(38.5), s(y)], fill=0, width=s(3.6))
-    return im
-
-
-def create():
-    """Create: a solid upright pill with three short rays cut out"""
-    im = canvas(); d = ImageDraw.Draw(im)
-    d.rounded_rectangle([s(19), s(11), s(45), s(52)], radius=s(13), fill=255)
-    for x0, y0, x1, y1 in ((32, 41, 32, 25), (26, 39, 24.5, 29), (38, 39, 39.5, 29)):
-        d.line([s(x0), s(y0), s(x1), s(y1)], fill=0, width=s(3.4))
-    return im
-
-
-def up():
-    """D-pad up: an arrow"""
-    im = canvas(); d = ImageDraw.Draw(im)
-    d.polygon([(s(32), s(12)), (s(47), s(30)), (s(37.5), s(30)), (s(37.5), s(51)), (s(26.5), s(51)), (s(26.5), s(30)),
-               (s(17), s(30))], fill=255)
-    return im
-
-
-GLYPHS = {
-    'a': lambda: face('cross'), 'b': lambda: face('circle'), 'x': lambda: face('square'), 'y': lambda: face('triangle'),
-    'lb': lambda: shoulder('L1'), 'rb': lambda: shoulder('R1'), 'lt': lambda: trigger('L2'), 'rt': lambda: trigger('R2'),
-    'ls': lambda: stick('L3'), 'rs': lambda: stick('R3'), 'start': options, 'back': create, 'up': up,
+# where the letters sit in each cell of the vanilla atlas (x0, y0, x1, y1, inclusive), as rt/glyphs.c finds them
+BOXES = {
+    'general_button_a': (21, 23, 31, 40), 'general_button_b': (23, 22, 30, 39), 'general_button_x': (22, 22, 30, 39),
+    'general_button_y': (21, 23, 30, 40), 'general_button_lb': (25, 26, 41, 37), 'general_button_rb': (21, 26, 39, 37),
+    'general_button_lt': (28, 25, 40, 38), 'general_button_rt': (23, 25, 37, 38), 'general_button_ls': (21, 16, 42, 28),
+    'general_button_rs': (20, 16, 43, 28),
+    'glow_general_button_a': (20, 23, 30, 40), 'glow_general_button_b': (21, 23, 30, 41),
+    'glow_general_button_x': (20, 22, 30, 40), 'glow_general_button_y': (20, 22, 30, 40),
+    'glow_general_button_lb': (25, 25, 42, 37), 'glow_general_button_rb': (21, 25, 39, 37),
+    'glow_general_button_lt': (27, 25, 40, 39), 'glow_general_button_rt': (23, 25, 37, 38),
+    'glow_general_button_ls': (20, 16, 42, 28), 'glow_general_button_rs': (19, 17, 44, 29),
+    'glow_general_button_start': (28, 26, 38, 38), 'glow_general_button_back': (25, 26, 35, 38),
 }
+KIND = {'a': 'cross', 'b': 'circle', 'x': 'square', 'y': 'triangle', 'lb': 'L1', 'rb': 'R1', 'lt': 'L2', 'rt': 'R2',
+        'ls': 'L3', 'rs': 'R3', 'start': 'options', 'back': 'create'}
 
 
-def silhouette(alpha):
-    """the glyph's outline filled in (its cut-outs closed): flood the outside from a corner"""
-    b = alpha.point(lambda v: 255 if v > 127 else 0)
-    ImageDraw.floodfill(b, (0, 0), 128)
-    return b.point(lambda v: 0 if v == 128 else 255)
+def S(v):
+    return v * SS
 
 
-def finish(alpha, size, glow, scale):
-    """downsample the supersampled alpha, drawn at scale about the centre; white glyph, optionally over a soft glow
-    (the selected look) that stays outside the button, so its cut-out symbol or name stays clear"""
-    n = alpha.size[0]
-    m = int(round(n * scale))
-
-    def small(img):
-        out = Image.new('L', (n, n), 0)
-        out.paste(img.resize((m, m), Image.BOX), ((n - m) // 2, (n - m) // 2))
-        return out.resize((size, size), Image.BOX)
-
-    a = small(alpha)
-    # soft (antialiased) edges: the game draws the 64-pixel cells larger on a 4K picture, where hard edges show steps
-    a = a.point(lambda v: 0 if v < 12 else 255 if v > 243 else v)
-    out = Image.new('RGBA', (size, size), (255, 255, 255, 0))
-    if glow:
-        sil = small(silhouette(alpha))
-        g = sil.filter(ImageFilter.GaussianBlur(size / 64 * 2.6)).point(lambda v: min(255, int(v * 0.8)))
-        g = Image.composite(Image.new('L', g.size, 0), g, sil.point(lambda v: 255 if v > 64 else 0))  # not inside
-        halo = Image.new('RGBA', (size, size), (255, 255, 255, 0))
-        halo.putalpha(g)
-        out = Image.alpha_composite(out, halo)
-    body = Image.new('RGBA', (size, size), (255, 255, 255, 0))
-    body.putalpha(a)
-    return Image.alpha_composite(out, body)
-
-
-def _alpha_dxt5(block):
-    a0, a1 = max(block), min(block)
-    if a0 == a1:
-        return bytes([a0, a1]) + bytes(6)
-    a0, a1 = 255, 0  # fixed end points for edge blocks: the glyphs are nearly two-level, and this keeps edges crisp
-    pal = [a0, a1] + [((7 - i) * a0 + i * a1) // 7 for i in range(1, 7)]
-    bits = 0
-    for k, v in enumerate(block):
-        idx = min(range(8), key=lambda j: abs(pal[j] - v))
-        bits |= idx << (3 * k)
-    return bytes([a0, a1]) + bits.to_bytes(6, 'little')
-
-
-WHITE = struct.pack('<HHI', 0xFFFF, 0x0000, 0)  # every texel colour 0: white (the menus tint it)
+def draw(kind, box):
+    """our symbol or lettering in the letters' box: body coverage, 64x64, 0-255"""
+    x0, y0, x1, y1 = box
+    cx, cy, h, w = (x0 + x1 + 1) / 2, (y0 + y1 + 1) / 2, y1 - y0 + 1, x1 - x0 + 1
+    im = Image.new('L', (64 * SS, 64 * SS), 0)
+    d = ImageDraw.Draw(im)
+    r = h / 2 * 0.98
+    W = int(S(SW))
+    if kind == 'cross':
+        k = r * 0.90
+        d.line([S(cx - k), S(cy - k), S(cx + k), S(cy + k)], fill=255, width=W)
+        d.line([S(cx - k), S(cy + k), S(cx + k), S(cy - k)], fill=255, width=W)
+    elif kind == 'circle':
+        rr = r * 0.98
+        d.ellipse([S(cx - rr), S(cy - rr), S(cx + rr), S(cy + rr)], outline=255, width=W)
+    elif kind == 'square':
+        k = r * 0.86
+        d.rectangle([S(cx - k), S(cy - k), S(cx + k), S(cy + k)], outline=255, width=W)
+    elif kind == 'triangle':
+        t = r * 1.06
+        d.polygon([(S(cx), S(cy - t * 1.05)), (S(cx + t), S(cy + t * 0.8)), (S(cx - t), S(cy + t * 0.8))], outline=255, width=W)
+    elif kind == 'options':  # three lines
+        for dy in (-4.2, 0, 4.2):
+            d.line([S(cx - 5.5), S(cy + dy), S(cx + 5.5), S(cy + dy)], fill=255, width=int(S(2.6)))
+    elif kind == 'create':  # three rays
+        for ax, ay, bx, by in ((0, 5, 0, -6), (-4.5, 4, -6, -4), (4.5, 4, 6, -4)):
+            d.line([S(cx + ax), S(cy + ay), S(cx + bx), S(cy + by)], fill=255, width=int(S(2.6)))
+    else:  # lettering: cap height = the old letters', squeezed to their width, thickened to their strokes
+        f = ImageFont.truetype(FONT, 400)
+        t = Image.new('L', (1400, 700), 0)
+        ImageDraw.Draw(t).text((40, 40), kind, font=f, fill=255, stroke_width=14, stroke_fill=255)
+        t = t.crop(t.getbbox())
+        th = S(h)
+        tw = min(S(w + 2), t.size[0] * th / t.size[1])
+        t = t.resize((int(tw), int(th)), Image.LANCZOS)
+        im.paste(255, (int(S(cx) - t.size[0] / 2), int(S(y0))), t)
+    return im.resize((64, 64), Image.BOX)
 
 
-def dxt5_blocks(im):
-    """raw DXT5 blocks of an RGBA image (white, alpha from the image), row by row"""
-    w, h = im.size
-    a = im.getchannel('A').load()
-    data = bytearray()
-    for by in range(0, h, 4):
-        for bx in range(0, w, 4):
-            data += _alpha_dxt5([a[bx + x, by + y] for y in range(4) for x in range(4)]) + WHITE
-    return bytes(data)
-
-
-def write_atlas_cell(path, im):
-    """the game draws its prompts from cells of a 1024x1024 DXT5 atlas (InterfaceShared0.dds): our glyph as DXT5
-    blocks for the 64x64 cell and its 32, 16, 8 and 4 mipmap levels, one after another (rt/glyphs.c)"""
-    data = bytearray()
-    for size in (64, 32, 16, 8, 4):
-        level = im if size == 64 else im.resize((size, size), Image.BOX)
-        data += dxt5_blocks(level)
-    with open(path, 'wb') as f:
-        f.write(bytes(data))
+def glow_of(body):
+    """the highlighted cells' halo, like the game's own: soft, about 0.6 at its brightest"""
+    g = body.filter(ImageFilter.GaussianBlur(2.4))
+    return g.point(lambda v: int(min(255, v * 1.6) * 0.62))
 
 
 def arm_label(path, label, w, h):
@@ -211,18 +105,15 @@ def arm_label(path, label, w, h):
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else 'assets'
-    alpha = {k: fn() for k, fn in GLYPHS.items()}
-    n = 0
-    for pct in SIZES:
-        cells = os.path.join(root, 'internal', 'atlas_glyphs', str(pct))
-        os.makedirs(cells, exist_ok=True)
-        for glow, keys in ((False, ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'ls', 'rs', 'up']),
-                           (True, ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'ls', 'rs', 'up', 'start', 'back'])):
-            for k in keys:
-                scale = min(1.0, pct / 100 * (1.10 if k in LABELLED else 1.0))
-                name = ('glow_' if glow else '') + 'general_button_' + k
-                write_atlas_cell(os.path.join(cells, name + '.dxt5'), finish(alpha[k], 64, glow, scale)); n += 1
-    print('wrote', n, 'atlas cells in', len(SIZES), 'sizes')
+    out = os.path.join(root, 'internal', 'ps3_cells')
+    os.makedirs(out, exist_ok=True)
+    for name, box in BOXES.items():
+        glow = name.startswith('glow_')
+        body = draw(KIND[name.split('_')[-1]], box)
+        data = bytes([1 if glow else 0]) + body.tobytes() + (glow_of(body).tobytes() if glow else b'')
+        with open(os.path.join(out, name + '.cell'), 'wb') as f:
+            f.write(data)
+    print('wrote', len(BOXES), 'cells to', out)
     labels = os.path.join(root, 'internal', 'arm_labels')
     os.makedirs(labels, exist_ok=True)
     arm_label(os.path.join(labels, 'l2.a8'), 'L2', 20, 13)  # box sizes: rt/glyphs.c g_tags

@@ -150,6 +150,24 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v30, PS3-style prompts, per-core CPU, console test hook:**
+  - **Prompts as the PS3 drew them.** Frames of PS3 gameplay (YouTube thumbnails) show the PS3 version's prompts in
+    the same art as the Xbox ones the PC files carry, with the PlayStation symbols: "✕)" where the Xbox has "A)" (the
+    arc is the side of a raised button). So the port now keeps the game's own icons and replaces only their letters
+    (rt/glyphs.c): each cell is split into its solid pieces, the one with the largest extent (arc, bumper or trigger
+    outline, stick, circle) is kept with any small piece above or below the middle band (a broken-off tip), the rest
+    (the letters) is erased with every glow pixel nearer to it, and our symbol (tools/make_glyphs.py: ✕ ○ □ △, bold
+    L1/R1, L2/R2, L3/R3 squeezed to the old letters' box, Options and Create marks) is laid in, with a halo like the
+    game's own on highlighted cells (grey, about 0.62 x its opacity, as the originals). Mipmaps rebuilt from the
+    result. Only letter boxes (coordinates) and our drawings are stored. iButtonPromptSize is gone (the game's own
+    sizes).
+  - **Per-core CPU in the overlay** (Detailed): a CORES block with each core's load as a bar and number
+    (kern.cp_times on the PS5, /proc/stat on Linux; the log says if the PS5 refuses).
+  - **FNV_CONSOLE="seconds:command;..."** runs console commands the way the console does (a temporary Script,
+    CompileAndRun 0x5AC400 with the console manager's compiler), at the frame's input poll (inside Present a
+    teleport deadlocks). Used to make a Strip test save from the Primm save: cow TheStripWorldNew 0 1 (the Lucky 38
+    cell; the Strip cells read from the ESM: StripLucky38 0,1, StripGomorrah -1,1, StripTops -1,0, StripUltraLuxe
+    0,-1, StripFSGate 0,2, the busiest 0,0), player.setlevel 30, 5000 caps, save StripTest.
 - **v29, new button prompts:** redrawn in the style of the console's own monochrome prompts: each button a solid
   shape (disc for the face buttons and sticks, a low pill for L1/R1, a trigger shape for L2/R2, an upright pill for
   Options and Create) with its symbol or name cut out, so the menus' tint fills the button and the symbol reads

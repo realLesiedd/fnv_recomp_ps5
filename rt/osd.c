@@ -6,6 +6,7 @@
  *   FPS    frame rate over the last half second, and the 1% low (the 99th percentile frame time of ~5 s, as fps)
  *   FRAME  frame time, and a graph of the last 240 frames with 30 and 60 fps lines
  *   CPU    the game's main thread (the usual limit for this game) and the whole process in cores; PS5 CPU temperature
+ *   CORES  each processor core's load, as a bar with its percentage (kern.cp_times on the PS5, /proc/stat on Linux)
  *   GPU    busy share from DXVK's GPU idle time (our DXVK patch), shaders being compiled (a stutter's usual cause);
  *          PS5 SoC temperature
  *   VRAM   video memory in use and available (VK_EXT_memory_budget)
@@ -29,6 +30,7 @@
 #ifdef __PROSPERO__
 #include <ps5platform/kernel.h>
 /* temperatures: looked up at run time, so a system without them only loses the readings */
+int sysctlbyname(const char *name, void *old, size_t *oldlen, const void *new_, size_t newlen);
 int sceKernelLoadStartModule(const char *, size_t, const void *, unsigned, void *, int *);
 int sceKernelDlsym(int, const char *, void **);
 static int (*p_cpu_temp)(int *), (*p_soc_temp)(int, int *);
@@ -100,7 +102,52 @@ static struct {
   double fps, ms, low1;
   int main_pct, total_pct, cores, gpu, compiling, temp_cpu, temp_soc, draws;
   unsigned vram_used, vram_total, ram_game, ram_free, ram_proc;
+  int ncores_seen, core[16];
 } S = {.gpu = -1, .temp_cpu = -1, .temp_soc = -1};
+
+/* per-core load since the last call, 0-100; returns the number of cores, 0 if unknown */
+#define MAXCORES 16
+static int core_loads(int pct[MAXCORES]) {
+  static unsigned long long prev_busy[MAXCORES], prev_total[MAXCORES];
+  unsigned long long busy[MAXCORES], total[MAXCORES];
+  int n = 0;
+#ifdef __PROSPERO__
+  /* FreeBSD: kern.cp_times, per core: user, nice, system, interrupt, idle ticks */
+  long t[MAXCORES * 5];
+  size_t len = sizeof t;
+  static int said;
+  if (sysctlbyname("kern.cp_times", t, &len, NULL, 0) != 0 || len < 5 * sizeof(long)) {
+    if (!said++) rt_log("overlay: per-core CPU load not available on this system");
+    return 0;
+  }
+  if (!said++) rt_log("overlay: per-core CPU load from kern.cp_times (%d cores)", (int)(len / (5 * sizeof(long))));
+  n = (int)(len / (5 * sizeof(long)));
+  for (int i = 0; i < n; i++) {
+    unsigned long long u = t[i * 5], ni = t[i * 5 + 1], sy = t[i * 5 + 2], in = t[i * 5 + 3], id = t[i * 5 + 4];
+    busy[i] = u + ni + sy + in; total[i] = busy[i] + id;
+  }
+#else
+  FILE *f = fopen("/proc/stat", "r");
+  if (!f) return 0;
+  char line[256];
+  while (fgets(line, sizeof line, f) && n < MAXCORES) {
+    unsigned long long v[8] = {0};
+    int k;
+    if (strncmp(line, "cpu", 3) || line[3] == ' ') continue; /* the per-core lines: cpu0, cpu1, ... */
+    if (sscanf(line, "cpu%d %llu %llu %llu %llu %llu %llu %llu %llu", &k, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]) < 5) continue;
+    busy[n] = v[0] + v[1] + v[2] + v[5] + v[6] + v[7]; total[n] = busy[n] + v[3] + v[4];
+    n++;
+  }
+  fclose(f);
+#endif
+  if (n > MAXCORES) n = MAXCORES;
+  for (int i = 0; i < n; i++) {
+    unsigned long long db = busy[i] - prev_busy[i], dt = total[i] - prev_total[i];
+    pct[i] = prev_total[i] && dt ? (int)(100 * db / dt) : 0;
+    prev_busy[i] = busy[i]; prev_total[i] = total[i];
+  }
+  return n;
+}
 
 static int cmp_f(const void *a, const void *b) { float x = *(const float *)a, y = *(const float *)b; return (x > y) - (x < y); }
 
@@ -125,6 +172,7 @@ static void sample(double t, double span) {
   if (span > 0 && last_proc >= 0 && proc >= 0) S.total_pct = (int)(100 * (proc - last_proc) / span + 0.5);
   last_thr = thr; last_proc = proc;
   if (!S.cores) { long n = sysconf(_SC_NPROCESSORS_ONLN); S.cores = n > 0 ? (int)n : 8; }
+  S.ncores_seen = core_loads(S.core);
   S.gpu = hb_gpu_load(&S.compiling);
   if (!hb_vram_mb(&S.vram_used, &S.vram_total)) S.vram_total = 0;
   S.ram_game = (unsigned)(g_guest_backed >> 20);
@@ -162,7 +210,8 @@ static u32 fps_color(double fps) { return fps >= 55 ? C_GOOD : fps >= 28 ? C_WAR
 static u32 ms_color(float ms) { return ms <= 17.5f ? C_GOOD : ms <= 34.5f ? C_WARN : C_BAD; }
 
 /* one line: label, value (colour), and a dimmer detail; or the graph */
-typedef struct { const char *label; char value[32], detail[96]; u32 vcolor, dcolor; int graph; } Row;
+typedef struct { const char *label; char value[32], detail[96]; u32 vcolor, dcolor; int graph; } Row; /* graph: 1 frame
+   times, 2 the cores */
 #define DETAIL 0.82f /* detail text size, relative */
 static float row_width(const Row *r, float size, float col1) {
   if (r->graph) return 0;
@@ -209,7 +258,7 @@ void osd_frame(void) {
   }
 
   /* detailed */
-  Row r[8];
+  Row r[10];
   int n = 0;
   memset(r, 0, sizeof r);
   r[n].label = "FPS"; snprintf(r[n].value, 32, "%.1f", S.fps); r[n].vcolor = fps_color(S.fps);
@@ -222,6 +271,7 @@ void osd_frame(void) {
   int o = snprintf(r[n].detail, 96, "main thread; all %.1f of %d cores", S.total_pct / 100.0, S.cores);
   if (S.temp_cpu >= 0) snprintf(r[n].detail + o, 96 - o, "; %d\x80" "C", S.temp_cpu);
   r[n].dcolor = C_DIM; n++;
+  if (S.ncores_seen) { r[n].label = "CORES"; r[n].graph = 2; n++; }
   r[n].label = "GPU";
   if (S.gpu >= 0) snprintf(r[n].value, 32, "%d%%", S.gpu); else snprintf(r[n].value, 32, "--");
   r[n].vcolor = S.gpu >= 95 ? C_WARN : C_VALUE;
@@ -244,16 +294,37 @@ void osd_frame(void) {
   r[n].label = "VIDEO"; snprintf(r[n].value, 32, "%ux%u", D ? D->pp[0] : 0, D ? D->pp[1] : 0);
   snprintf(r[n].detail, 96, "%d draws", S.draws); r[n].vcolor = C_VALUE; r[n].dcolor = C_DIM; n++;
 
-  float width = size * 15, graph_h = size * 3.2f, height = 0;
+  float width = size * 15, graph_h = size * 3.2f, cores_h = size * 2.9f, height = 0;
+  float core_w = size * 1.75f; /* each core's column */
   for (int i = 0; i < n; i++) {
-    float w = row_width(&r[i], size, col1);
+    float w = r[i].graph == 2 ? col1 + S.ncores_seen * core_w : row_width(&r[i], size, col1);
     if (w > width) width = w;
-    height += r[i].graph ? graph_h : line;
+    height += r[i].graph == 1 ? graph_h : r[i].graph == 2 ? cores_h : line;
   }
   hb_osd_rect(x0 - size * 0.5f, y0 - size * 0.35f, width + size, height + size * 0.5f, C_PANEL);
   float y = y0;
   for (int i = 0; i < n; i++) {
-    if (r[i].graph) { /* frame times, 0-50 ms; lines at 16.7 (60 fps) and 33.3 (30 fps) */
+    if (r[i].graph == 2) { /* each core: its load as a number over a bar, its number under it */
+      hb_osd_text(x0, y + size * 0.85f, size, "CORES", C_LABEL);
+      float bh = size * 1.45f, top = y + size * 0.75f;
+      for (int k = 0; k < S.ncores_seen; k++) {
+        int pc = S.core[k] < 0 ? 0 : S.core[k] > 100 ? 100 : S.core[k];
+        float bx = x0 + col1 + k * core_w, bw = core_w * 0.62f;
+        u32 col = pc >= 90 ? C_BAD : pc >= 60 ? C_WARN : C_GOOD;
+        char t[8];
+        snprintf(t, sizeof t, "%d", pc);
+        float tw = hb_osd_text_width(size * 0.62f, t);
+        hb_osd_text(bx + (bw - tw) / 2, y, size * 0.62f, t, C_VALUE);
+        hb_osd_rect(bx, top, bw, bh, 0x50000000u);
+        hb_osd_rect(bx, top + bh - bh * pc / 100, bw, bh * pc / 100, col & 0xE0FFFFFFu);
+        snprintf(t, sizeof t, "%d", k);
+        tw = hb_osd_text_width(size * 0.55f, t);
+        hb_osd_text(bx + (bw - tw) / 2, top + bh + size * 0.08f, size * 0.55f, t, C_DIM);
+      }
+      y += cores_h;
+      continue;
+    }
+    if (r[i].graph == 1) { /* frame times, 0-50 ms; lines at 16.7 (60 fps) and 33.3 (30 fps) */
       float gx = x0, gy = y + size * 0.1f, gw = width, gh = graph_h - size * 0.5f, top = 50;
       hb_osd_rect(gx, gy, gw, gh, 0x50000000u);
       hb_osd_rect(gx, gy + gh - gh * 16.7f / top, gw, size * 0.06f + 1, 0x7066FF66u);

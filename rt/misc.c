@@ -123,6 +123,7 @@ u64 g_stat_pad;
 API(x_XInputGetState) {
   PlatPad p; u32 packet; u32 st = ARG(1);
   g_stat_pad++;
+  { extern void console_script(void); console_script(); } /* FNV_CONSOLE test commands, at the frame's input poll */
   if (!(ARG(0) == 0 && pad_script(&p, &packet)) && !plat_pad(ARG(0), &p, &packet)) RETURN_STD(2, 1167); /* ERROR_DEVICE_NOT_CONNECTED */
   M32(st) = packet; M16(st + 4) = p.buttons; M8(st + 6) = p.lt; M8(st + 7) = p.rt;
   if (ARG(0) == 0) { extern int g_ds_rt; g_ds_rt = p.rt; } /* dualsense.c: a shot is rumble while R2 is held */

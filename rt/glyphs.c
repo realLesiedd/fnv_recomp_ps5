@@ -1,16 +1,22 @@
 /* PlayStation button prompts. The game draws its controller prompts (Pip-Boy, menus, HUD hints) from 64x64 cells of
  * its UI texture atlas, textures\\interface\\interfaceshared0.dds (1024x1024 DXT5, laid out by interfaceshared.tai;
- * that is why the separate general_button_*.dds files are never read). When the game uploads that atlas, it is
- * recognised (its first bytes, then an FNV-1a 64 fingerprint of the player's own copy) and the 22 button cells are
- * overwritten, mipmaps included, with the drawings from tools/make_glyphs.py, built into the executable as DXT5
- * blocks, in five sizes; iButtonPromptSize in FalloutPrefs.ini [fnv_recomp] picks one (percent: 50, 60, 70, 80 or
- * 100; 60 by default). Nothing in the player's game files changes, and any other atlas is left alone.
+ * that is why the separate general_button_*.dds files are never read).
+ *
+ * The PS3 version drew its prompts in the same art as the Xbox ones in the PC files, with the PlayStation symbols:
+ * "✕)" where the Xbox has "A)" (the arc is the side of a raised button). So when the game uploads that atlas (recognised
+ * by its first bytes and an FNV-1a 64 fingerprint of the player's own copy), each of the 22 button cells keeps the
+ * game's own art and loses only its letters: the cell is split into its solid pieces, the one with the largest extent
+ * (the arc, the bumper or trigger outline, the stick, the circle) is kept along with any small piece above or below
+ * the middle band (a broken-off tip), the rest - the letters - are erased with every pixel of glow nearer to them
+ * than to the kept shape, and the symbol drawn by tools/make_glyphs.py (✕ ○ □ △, L1/R1, L2/R2, L3/R3, the DualSense's
+ * Options and Create marks) is laid in, with a halo like the game's own on the highlighted cells. The mipmaps of the
+ * cell are rebuilt from the result. Nothing in the player's files changes, and any other atlas is left alone.
  *
  * The Pip-Boy arm has the main-tab buttons printed on it, LT and RT (textures\\pipboy3000\\
  * pipboyarm01.dds and the Xbox copies, 1024x1024 DXT1). On the DualSense those are L2 and R2: when that texture is
- * uploaded (recognised the same way), the old letters on the two tags are erased, the gap filled from the tag around them, and L2/R2 painted
- * in the old letters' colour (lettering from tools/make_glyphs.py). The first three mipmap levels are redone from the
- * result; below that the tags are a few pixels across. */
+ * uploaded (recognised the same way), the old letters on the two tags are erased, the gap filled from the tag around
+ * them, and L2/R2 painted in the old letters' colour (lettering from tools/make_glyphs.py). The first three mipmap
+ * levels are redone from the result; below that the tags are a few pixels across. */
 #include "rt.h"
 #include "d3d9_internal.h"
 #include <math.h>
@@ -58,36 +64,6 @@ static const EmbeddedAsset *asset(const char *path) {
   for (int k = 0; k < g_nassets; k++)
     if (!strcmp(g_assets[k].path, path)) return &g_assets[k];
   return NULL;
-}
-
-int rt_setting_int(const char *key, int def); /* firstrun.c */
-
-static void atlas_patch(Obj *o) {
-  if (memcmp(HP(o->data[0][0]), g_atlas_head, sizeof g_atlas_head)) return; /* cheap test first */
-  if (fnv1a64(HP(o->data[0][0]), 1024u * 1024u) != ATLAS_HASH) return;
-  static const int sizes[] = {50, 60, 70, 80, 100}; /* the sets tools/make_glyphs.py draws */
-  int want = rt_setting_int("iButtonPromptSize", 60), pct = sizes[0];
-  for (unsigned i = 0; i < sizeof sizes / sizeof *sizes; i++) /* the nearest set */
-    if (abs(sizes[i] - want) < abs(pct - want)) pct = sizes[i];
-  int done = 0;
-  for (unsigned i = 0; i < sizeof g_cells / sizeof *g_cells; i++) {
-    char path[128];
-    snprintf(path, sizeof path, "internal/atlas_glyphs/%d/%s.dxt5", pct, g_cells[i].name);
-    const EmbeddedAsset *a = asset(path);
-    if (!a) continue;
-    const u8 *src = a->data;
-    for (u32 l = 0, size = 64; size >= 4 && l < o->levels && l < MAXLVL; l++, size /= 2) {
-      u32 nb = size / 4, bytes = nb * nb * 16;
-      if ((size_t)(src - a->data) + bytes > a->size) break;
-      if (o->data[0][l]) {
-        u32 bx = (g_cells[i].x >> l) / 4, by = (g_cells[i].y >> l) / 4;
-        for (u32 r = 0; r < nb; r++) memcpy(HP(o->data[0][l] + (by + r) * o->pitch[l] + bx * 16), src + r * nb * 16, nb * 16);
-      }
-      src += bytes;
-    }
-    done++;
-  }
-  rt_log("button prompts: %d PlayStation glyphs written into the UI atlas (size %d%%)", done, pct);
 }
 
 /* ---- the Pip-Boy arm's LT/RT tags ---- */
@@ -267,6 +243,189 @@ static void arm_patch(Obj *o) {
   }
   for (unsigned t = 0; t < sizeof g_tags / sizeof *g_tags; t++) arm_tag(o, t, k);
   rt_log("button prompts: Pip-Boy arm relabelled L2/R2 (%ux%u)", o->w, o->h);
+}
+
+
+/* ---- the UI atlas's button cells ------------------------------------------------------------------------------- */
+typedef struct { float r, g, b, a; } Px;
+
+/* DXT5: an alpha block (two end points, eight levels, 3-bit indices) and a colour block (always four colours) */
+static void dxt5_decode(const u8 *blk, Px px[16]) {
+  float al[8];
+  al[0] = blk[0]; al[1] = blk[1];
+  if (blk[0] > blk[1]) for (int i = 1; i < 7; i++) al[1 + i] = ((7 - i) * al[0] + i * al[1]) / 7;
+  else { for (int i = 1; i < 5; i++) al[1 + i] = ((5 - i) * al[0] + i * al[1]) / 5; al[6] = 0; al[7] = 255; }
+  u64 abits = 0;
+  for (int i = 0; i < 6; i++) abits |= (u64)blk[2 + i] << (8 * i);
+  Rgb pal[4];
+  u16 c0 = (u16)(blk[8] | blk[9] << 8), c1 = (u16)(blk[10] | blk[11] << 8);
+  pal[0] = rgb565(c0); pal[1] = rgb565(c1);
+  pal[2] = (Rgb){(2 * pal[0].r + pal[1].r) / 3, (2 * pal[0].g + pal[1].g) / 3, (2 * pal[0].b + pal[1].b) / 3};
+  pal[3] = (Rgb){(pal[0].r + 2 * pal[1].r) / 3, (pal[0].g + 2 * pal[1].g) / 3, (pal[0].b + 2 * pal[1].b) / 3};
+  u32 cbits = (u32)blk[12] | (u32)blk[13] << 8 | (u32)blk[14] << 16 | (u32)blk[15] << 24;
+  for (int i = 0; i < 16; i++) {
+    Rgb c = pal[(cbits >> (2 * i)) & 3];
+    px[i] = (Px){c.r, c.g, c.b, al[(abits >> (3 * i)) & 7]};
+  }
+}
+static void dxt5_encode(const Px px[16], u8 *blk) {
+  float lo = 255, hi = 0;
+  for (int i = 0; i < 16; i++) { if (px[i].a < lo) lo = px[i].a; if (px[i].a > hi) hi = px[i].a; }
+  int a0 = (int)(hi + 0.5f), a1 = (int)(lo + 0.5f);
+  u64 bits = 0;
+  if (a0 == a1) { if (a0 < 255) a0++; else a1--; } /* eight-level mode needs a0 > a1 */
+  float al[8];
+  al[0] = (float)a0; al[1] = (float)a1;
+  for (int i = 1; i < 7; i++) al[1 + i] = ((7 - i) * al[0] + i * al[1]) / 7;
+  for (int i = 0; i < 16; i++) {
+    int best = 0;
+    for (int j = 1; j < 8; j++) if (fabsf(al[j] - px[i].a) < fabsf(al[best] - px[i].a)) best = j;
+    bits |= (u64)best << (3 * i);
+  }
+  blk[0] = (u8)a0; blk[1] = (u8)a1;
+  for (int i = 0; i < 6; i++) blk[2 + i] = (u8)(bits >> (8 * i));
+  Rgb c[16];
+  for (int i = 0; i < 16; i++) c[i] = (Rgb){px[i].r, px[i].g, px[i].b};
+  dxt1_encode(c, blk + 8); /* always four colours (c0 >= c1); DXT5 ignores the order */
+}
+
+/* the cell's solid pieces (4-connected, alpha above th): label per pixel, and each piece's box and size */
+typedef struct { int x0, y0, x1, y1, n; } Piece;
+static int pieces(const Px img[64][64], float th, short lab[64][64], Piece *pc, int max) {
+  static short stack[4096 * 2];
+  int np = 0;
+  for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) lab[y][x] = -1;
+  for (int y = 0; y < 64; y++)
+    for (int x = 0; x < 64; x++) {
+      if (img[y][x].a <= th || lab[y][x] >= 0 || np >= max) continue;
+      Piece *p = &pc[np];
+      *p = (Piece){x, y, x, y, 0};
+      int sp = 0;
+      stack[sp++] = (short)y; stack[sp++] = (short)x; lab[y][x] = (short)np;
+      while (sp) {
+        int cx = stack[--sp], cy = stack[--sp];
+        p->n++;
+        if (cx < p->x0) p->x0 = cx; if (cx > p->x1) p->x1 = cx; if (cy < p->y0) p->y0 = cy; if (cy > p->y1) p->y1 = cy;
+        static const int dx[4] = {1, -1, 0, 0}, dy[4] = {0, 0, 1, -1};
+        for (int k = 0; k < 4; k++) {
+          int nx = cx + dx[k], ny = cy + dy[k];
+          if (nx < 0 || nx > 63 || ny < 0 || ny > 63 || lab[ny][nx] >= 0 || img[ny][nx].a <= th) continue;
+          lab[ny][nx] = (short)np;
+          stack[sp++] = (short)ny; stack[sp++] = (short)nx;
+        }
+      }
+      np++;
+    }
+  return np;
+}
+
+/* erases the letters and their glow; their box goes in *box. Returns 0 if there were none. */
+static int erase_letters(Px img[64][64], int box[4]) {
+  static short lab[64][64];
+  Piece pc[64];
+  int np = 0;
+  for (int pass = 0; pass < 2 && np <= 1; pass++) np = pieces(img, pass ? 235.f : 180.f, lab, pc, 64); /* letters may
+                                                                     touch the outline through a glow */
+  if (np <= 1) return 0;
+  int keep = 0;
+  for (int i = 1; i < np; i++)
+    if ((pc[i].x1 - pc[i].x0 + 1) * (pc[i].y1 - pc[i].y0 + 1) > (pc[keep].x1 - pc[keep].x0 + 1) * (pc[keep].y1 - pc[keep].y0 + 1)) keep = i;
+  char letter[64];
+  int any = 0;
+  box[0] = box[1] = 64; box[2] = box[3] = -1;
+  for (int i = 0; i < np; i++) {
+    float cy = (pc[i].y0 + pc[i].y1) / 2.0f;
+    letter[i] = i != keep && pc[i].n >= 4 && cy >= 18 && cy <= 45; /* a tip above or below the band stays */
+    if (!letter[i]) continue;
+    any = 1;
+    if (pc[i].x0 < box[0]) box[0] = pc[i].x0; if (pc[i].y0 < box[1]) box[1] = pc[i].y0;
+    if (pc[i].x1 > box[2]) box[2] = pc[i].x1; if (pc[i].y1 > box[3]) box[3] = pc[i].y1;
+  }
+  if (!any) return 0;
+  /* each visible pixel goes with the nearer of: the letters' solid pixels, the kept shape's */
+  static short lp[4096][2], kp[4096][2];
+  int nl = 0, nk = 0;
+  for (int y = 0; y < 64; y++)
+    for (int x = 0; x < 64; x++) {
+      int l = lab[y][x];
+      if (l < 0) continue;
+      if (letter[l]) { lp[nl][0] = (short)y; lp[nl][1] = (short)x; nl++; }
+      else { kp[nk][0] = (short)y; kp[nk][1] = (short)x; nk++; }
+    }
+  for (int y = 0; y < 64; y++)
+    for (int x = 0; x < 64; x++) {
+      if (img[y][x].a <= 0) continue;
+      int dl = 1 << 30, dk = 1 << 30;
+      for (int i = 0; i < nl; i++) { int d = (lp[i][0] - y) * (lp[i][0] - y) + (lp[i][1] - x) * (lp[i][1] - x); if (d < dl) dl = d; }
+      if (dl > 14 * 14) continue; /* far from any letter */
+      for (int i = 0; i < nk && dk > dl; i++) { int d = (kp[i][0] - y) * (kp[i][0] - y) + (kp[i][1] - x) * (kp[i][1] - x); if (d < dk) dk = d; }
+      if (dl < dk) img[y][x] = (Px){0, 0, 0, 0};
+    }
+  return 1;
+}
+
+static int patch_cell(Obj *o, u32 cx, u32 cy, const EmbeddedAsset *a) {
+  if (!a || a->size < 1 + 4096 || (a->data[0] && a->size < 1 + 2 * 4096)) return 0;
+  static Px img[64][64];
+  for (int by = 0; by < 16; by++)
+    for (int bx = 0; bx < 16; bx++) {
+      Px b[16];
+      dxt5_decode(HP(o->data[0][0] + (cy / 4 + by) * o->pitch[0] + (cx / 4 + bx) * 16), b);
+      for (int i = 0; i < 16; i++) img[by * 4 + i / 4][bx * 4 + i % 4] = b[i];
+    }
+  int box[4];
+  if (!erase_letters(img, box)) return 0;
+  const u8 *body = a->data + 1, *glow = a->data[0] ? a->data + 1 + 4096 : NULL;
+  for (int y = 0; y < 64; y++)
+    for (int x = 0; x < 64; x++) {
+      Px *p = &img[y][x];
+      if (glow && glow[y * 64 + x] > p->a) { /* the halo: grey, darker where fainter, as the game's own */
+        float g = glow[y * 64 + x];
+        p->a = g; p->r = p->g = p->b = g * 0.62f;
+      }
+      float k = body[y * 64 + x] / 255.0f;
+      if (k > 0) {
+        p->r += (255 - p->r) * k; p->g += (255 - p->g) * k; p->b += (255 - p->b) * k;
+        if (body[y * 64 + x] > p->a) p->a = body[y * 64 + x];
+      }
+    }
+  /* write the cell back, and its mipmaps (each an average of the level above) down to 4x4 */
+  static Px lvl[64][64];
+  memcpy(lvl, img, sizeof lvl);
+  for (u32 l = 0, size = 64; size >= 4 && l < o->levels && l < MAXLVL; l++, size /= 2) {
+    if (!o->data[0][l]) break;
+    if (l) {
+      for (u32 y = 0; y < size; y++)
+        for (u32 x = 0; x < size; x++) {
+          Px s = {0, 0, 0, 0};
+          for (int k = 0; k < 4; k++) {
+            Px q = lvl[2 * y + (k >> 1)][2 * x + (k & 1)];
+            s.r += q.r / 4; s.g += q.g / 4; s.b += q.b / 4; s.a += q.a / 4;
+          }
+          lvl[y][x] = s;
+        }
+    }
+    for (u32 by = 0; by < size / 4; by++)
+      for (u32 bx = 0; bx < size / 4; bx++) {
+        Px b[16];
+        for (int i = 0; i < 16; i++) b[i] = lvl[by * 4 + i / 4][bx * 4 + i % 4];
+        dxt5_encode(b, HP(o->data[0][l] + ((cy >> l) / 4 + by) * o->pitch[l] + ((cx >> l) / 4 + bx) * 16));
+      }
+  }
+  return 1;
+}
+
+static void atlas_patch(Obj *o) {
+  if (memcmp(HP(o->data[0][0]), g_atlas_head, sizeof g_atlas_head)) return; /* cheap test first */
+  if (fnv1a64(HP(o->data[0][0]), 1024u * 1024u) != ATLAS_HASH) return;
+  int done = 0;
+  for (unsigned i = 0; i < sizeof g_cells / sizeof *g_cells; i++) {
+    char path[128];
+    snprintf(path, sizeof path, "internal/ps3_cells/%s.cell", g_cells[i].name);
+    done += patch_cell(o, g_cells[i].x, g_cells[i].y, asset(path));
+  }
+  rt_log("button prompts: %d of %d prompts in the UI atlas given PlayStation symbols", done,
+         (int)(sizeof g_cells / sizeof *g_cells));
 }
 
 /* called before a texture's level 0 goes to the GPU */

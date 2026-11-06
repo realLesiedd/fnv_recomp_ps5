@@ -23,7 +23,7 @@
 #include <ucontext.h>
 #endif
 
-#define FNV_RELEASE "v29" /* printed at the top of the log so a log shows which build produced it */
+#define FNV_RELEASE "v30" /* printed at the top of the log so a log shows which build produced it */
 
 int g_trace;
 u32 g_peb;
