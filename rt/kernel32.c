@@ -83,7 +83,15 @@ API(k_DeleteCriticalSection) { RETURN_STD(1, 0); }
 static u32 cur_tid(Ctx *c) { return M32(c->fs_base + 0x24); }
 API(k_EnterCriticalSection) {
   u32 cs = ARG(0);
-  pthread_mutex_lock(cs_get(cs));
+  pthread_mutex_t *m = cs_get(cs);
+  if (pthread_mutex_trylock(m)) { /* a wait over 5 s is reported (rt_cs_wait_report: holder, stacks), then it keeps waiting */
+    struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 5;
+    if (pthread_mutex_timedlock(m, &ts)) {
+      extern void rt_cs_wait_report(Ctx *c, u32 cs);
+      rt_cs_wait_report(c, cs);
+      pthread_mutex_lock(m);
+    }
+  }
   M32(cs + 12) = cur_tid(c); M32(cs + 8) += 1;
   RETURN_STD(1, 0);
 }
@@ -95,8 +103,14 @@ API(k_TryEnterCriticalSection) {
 }
 API(k_LeaveCriticalSection) {
   u32 cs = ARG(0);
+  u32 owner = M32(cs + 12);
   if (M32(cs + 8) && --M32(cs + 8) == 0) M32(cs + 12) = 0;
-  pthread_mutex_unlock(cs_get(cs));
+  int e = pthread_mutex_unlock(cs_get(cs));
+  if (e) { /* a release the host mutex refused (not the owner, or not held): Windows would allow it */
+    static int said;
+    if (said++ < 20) rt_log("LeaveCriticalSection(%08x) from %08x refused (%d): thread %x, owner %x", cs, M32(ESP), e,
+                            cur_tid(c), owner);
+  }
   RETURN_STD(1, 0);
 }
 

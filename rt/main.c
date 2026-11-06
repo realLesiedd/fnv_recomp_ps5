@@ -299,9 +299,49 @@ static void stack_report(void) {
   }
   rt_log("%s", b);
 }
+static Ctx *volatile g_thr_ctx[MAXTHR];
+/* return addresses found on a guest stack (values in .text right after a call instruction) */
+static int guest_stack(char *b, int n, u32 esp, u32 top) {
+  int o = 0, k = 0;
+  if (!top || top > esp + 8192) top = esp + 8192;
+  for (u32 a = esp; a + 4 <= top && k < 16 && o < n - 12; a += 4) {
+    u32 v = M32(a);
+    if (v < 0x401010 || v >= 0xFDF000) continue;
+    const u8 *p = HP(v);
+    if (p[-5] == 0xE8 || (p[-2] == 0xFF && (p[-1] & 0x38) == 0x10) || (p[-3] == 0xFF && (p[-2] & 0x38) == 0x10) ||
+        (p[-6] == 0xFF && (p[-5] & 0x38) == 0x10)) { o += snprintf(b + o, n - o, " %08x", v); k++; }
+  }
+  return o;
+}
+/* a thread has waited 5 s for a critical section: say who holds it and where both are (the game spinlock too) */
+void rt_cs_wait_report(Ctx *c, u32 cs) {
+  u32 owner = M32(cs + 12);
+  char b[400];
+  guest_stack(b, sizeof b, c->r[4], M32(c->fs_base + 4));
+  rt_log("cs wait: t%d waits 5 s for %08x (count %u, owner tid %x); stack:%s", c->thread_index, cs, M32(cs + 8), owner, b);
+  for (int t = 0; t < MAXTHR; t++) {
+    Ctx *o = g_thr_ctx[t];
+    if (!o || M32(o->fs_base + 0x24) != owner) continue;
+    guest_stack(b, sizeof b, o->r[4], M32(o->fs_base + 4));
+    rt_log("cs wait: owner is t%d, %s %s (from %08x); stack at its last call:%s", t, g_in_api[t] ? "in" : "running game code after",
+           g_in_api[t] ? g_in_api[t] : g_last_api[t] ? g_last_api[t] : "?", g_last_ret[t], b);
+    if (g_in_api[t] && g_last_ret[t] == 0x40FCAD) { /* spinning in the game's spinlock (0x40FBF0): which lock, held by whom */
+      u32 lock = M32(M32(o->r[5]) - 4), holder = M32(lock);
+      rt_log("cs wait: t%d spins for lock %08x (count %u) held by tid %x", t, lock, M32(lock + 4), holder);
+      for (int h = 0; h < MAXTHR; h++) {
+        Ctx *q = g_thr_ctx[h];
+        if (!q || M32(q->fs_base + 0x24) != holder) continue;
+        guest_stack(b, sizeof b, q->r[4], M32(q->fs_base + 4));
+        rt_log("cs wait: lock holder is t%d, %s %s (from %08x); stack:%s", h, g_in_api[h] ? "in" : "running game code after",
+               g_in_api[h] ? g_in_api[h] : g_last_api[h] ? g_last_api[h] : "?", g_last_ret[h], b);
+      }
+    }
+  }
+}
 void rt_bind_thread(Ctx *c) {
   t_ctx = c;
   int ti = c->thread_index & (MAXTHR - 1);
+  g_thr_ctx[ti] = c;
   g_pth[ti] = pthread_self();
   g_pth_set[ti] = 1;
   if (stack_stats()) stack_paint(ti);

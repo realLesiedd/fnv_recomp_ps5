@@ -86,7 +86,7 @@ API(n_ntohs) { u32 v = ARG(0) & 0xffff; RETURN_STD(1, ((v & 0xff) << 8) | (v >> 
 /* test hook (FNV_PADSCRIPT="30:down,31:a"): scripted presses on controller 0 at the given
    seconds after start, for reproducing menu flows in automated runs */
 static int pad_script(PlatPad *p, u32 *packet) {
-  static int init; static double t0; static struct { double t; u16 b; } ev[96]; static int n;
+  static int init; static double t0; static struct { double t; u16 b; int polls; } ev[96]; static int n;
   if (!init) {
     init = 1;
     const char *e = getenv("FNV_PADSCRIPT");
@@ -110,7 +110,8 @@ static int pad_script(PlatPad *p, u32 *packet) {
     if (ev[i].b == 0xA001 && now >= ev[i].t && now < ev[i].t + 3) p->ly = 32767;
     if (ev[i].b == 0xA002 && now >= ev[i].t && now < ev[i].t + 3) p->rx = 32767;
     if (ev[i].b == 0xA003 && now >= ev[i].t && now < ev[i].t + 0.3) p->rt = 255;
-    if (ev[i].b < 0xA000 && now >= ev[i].t && now < ev[i].t + 0.25) {
+    if (ev[i].b < 0xA000 && now >= ev[i].t && (now < ev[i].t + 0.25 || ev[i].polls < 4)) { /* seen by 4 reads at least */
+      ev[i].polls++;
       p->buttons |= ev[i].b;
       if (ev[i].b == 0x2) p->ly = -32000; /* the menus also follow the left stick */
       if (ev[i].b == 0x1) p->ly = 32000;

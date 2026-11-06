@@ -144,6 +144,32 @@ static void own_settings(void) {
   free(b);
 }
 
+/* Game settings the port keeps at a fixed value on every launch, whatever Fallout.ini says.
+   bUseMultiThreadedFaceGen: with FaceGen on the task thread, loading a save can deadlock in three game threads:
+   the main thread builds a face (GetOrCreateFaceGenModel) holding one lock (0x11C5CF0) and waits for the FaceGen
+   lock (0x11D5A9C); BSTaskManagerThread holds that and waits for a spinlock while freeing memory; and
+   BackgroundCloneThread holds the spinlock and waits for the first lock. Reproduced 3 of 3 with a user's Primm save;
+   with this off the same save loaded every time. */
+static const struct { const char *sect, *key, *val; } g_fixed[] = {
+  {"BackgroundLoad", "bUseMultiThreadedFaceGen", "0"},
+};
+static void fixed_settings(const char *ini) {
+  long n;
+  char *b = slurp(ini, &n);
+  if (!b) return;
+  int changed = 0;
+  for (size_t i = 0; i < sizeof g_fixed / sizeof *g_fixed; i++) {
+    char want[200];
+    snprintf(want, sizeof want, "%s=%s", g_fixed[i].key, g_fixed[i].val);
+    if (rt_strcasestr(b, want)) continue;
+    b = ini_set(b, g_fixed[i].sect, g_fixed[i].key, g_fixed[i].val);
+    rt_log("settings: Fallout.ini [%s] %s set to %s", g_fixed[i].sect, g_fixed[i].key, g_fixed[i].val);
+    changed = 1;
+  }
+  if (changed) { FILE *f = fopen(ini, "wb"); if (f) { fputs(b, f); fclose(f); } }
+  free(b);
+}
+
 void rt_first_run(void) {
   char dir[1100], ini[1200], prefs[1200], src[1200];
   snprintf(dir, sizeof dir, "%s/Documents/My Games/FalloutNV", g_user_dir);
@@ -157,6 +183,7 @@ void rt_first_run(void) {
     if (b) { FILE *f = fopen(ini, "wb"); if (f) { fwrite(b, 1, n, f); fclose(f); } free(b); rt_log("first run: created Fallout.ini"); }
     else rt_log("first run: %s is missing - is the game folder complete?", src);
   }
+  fixed_settings(ini);
   if (access(prefs, F_OK) != 0) {
     const char *preset = getenv("FNV_PRESET") ? getenv("FNV_PRESET") : "VeryHigh";
     snprintf(src, sizeof src, "%s/%s.ini", g_game_dir, preset);

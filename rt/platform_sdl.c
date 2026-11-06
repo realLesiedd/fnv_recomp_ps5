@@ -7,6 +7,18 @@
 static SDL_Window *g_win;
 static SDL_GameController *g_pad[4];
 static uint32_t g_packet;
+/* XInput-style button bits for the SDL buttons (the touchpad click is Back, which opens Wait) */
+static const struct { SDL_GameControllerButton b; uint16_t x; } g_btn_map[] = {
+  {SDL_CONTROLLER_BUTTON_DPAD_UP, 0x1}, {SDL_CONTROLLER_BUTTON_DPAD_DOWN, 0x2}, {SDL_CONTROLLER_BUTTON_DPAD_LEFT, 0x4},
+  {SDL_CONTROLLER_BUTTON_DPAD_RIGHT, 0x8}, {SDL_CONTROLLER_BUTTON_START, 0x10}, {SDL_CONTROLLER_BUTTON_BACK, 0x20},
+  {SDL_CONTROLLER_BUTTON_LEFTSTICK, 0x40}, {SDL_CONTROLLER_BUTTON_RIGHTSTICK, 0x80},
+  {SDL_CONTROLLER_BUTTON_LEFTSHOULDER, 0x100}, {SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, 0x200},
+  {SDL_CONTROLLER_BUTTON_A, 0x1000}, {SDL_CONTROLLER_BUTTON_B, 0x2000}, {SDL_CONTROLLER_BUTTON_X, 0x4000},
+  {SDL_CONTROLLER_BUTTON_Y, 0x8000}, {SDL_CONTROLLER_BUTTON_TOUCHPAD, 0x20},
+};
+/* buttons pressed since they were last reported, kept for two reads (the game reads the pad twice a frame) */
+static uint16_t g_tap[4];
+static int g_tap_reads[4];
 static uint8_t g_keys[256];
 static uint8_t g_keys_latch[256]; /* pressed since the game last read the keyboard: a press shorter than a frame still counts */
 static int32_t g_mdx, g_mdy, g_mdz;
@@ -152,7 +164,13 @@ void plat_pump(void) {
       for (int s = 0; s < 4; s++)
         if (g_pad[s] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad[s])) == e.cdevice.which) { SDL_GameControllerClose(g_pad[s]); g_pad[s] = NULL; }
       break;
-    case SDL_CONTROLLERBUTTONDOWN: case SDL_CONTROLLERBUTTONUP: case SDL_CONTROLLERAXISMOTION: g_packet++; break;
+    case SDL_CONTROLLERBUTTONDOWN: /* latch the press: a tap that starts and ends between two reads is still seen */
+      for (int k = 0; k < 4; k++)
+        if (g_pad[k] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad[k])) == e.cbutton.which)
+          for (unsigned i = 0; i < sizeof g_btn_map / sizeof *g_btn_map; i++)
+            if (g_btn_map[i].b == e.cbutton.button) { g_tap[k] |= g_btn_map[i].x; g_tap_reads[k] = 0; }
+      g_packet++; break;
+    case SDL_CONTROLLERBUTTONUP: case SDL_CONTROLLERAXISMOTION: g_packet++; break;
     }
   }
   pthread_mutex_unlock(&g_in_lock);
@@ -164,16 +182,10 @@ int plat_pad(int index, PlatPad *o, uint32_t *packet) {
   pthread_mutex_lock(&g_in_lock);
   SDL_GameController *p = g_pad[index];
   if (!p) { pthread_mutex_unlock(&g_in_lock); return 0; }
-  static const struct { SDL_GameControllerButton b; uint16_t x; } map[] = {
-    {SDL_CONTROLLER_BUTTON_DPAD_UP, 0x1}, {SDL_CONTROLLER_BUTTON_DPAD_DOWN, 0x2}, {SDL_CONTROLLER_BUTTON_DPAD_LEFT, 0x4},
-    {SDL_CONTROLLER_BUTTON_DPAD_RIGHT, 0x8}, {SDL_CONTROLLER_BUTTON_START, 0x10}, {SDL_CONTROLLER_BUTTON_BACK, 0x20},
-    {SDL_CONTROLLER_BUTTON_LEFTSTICK, 0x40}, {SDL_CONTROLLER_BUTTON_RIGHTSTICK, 0x80},
-    {SDL_CONTROLLER_BUTTON_LEFTSHOULDER, 0x100}, {SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, 0x200},
-    {SDL_CONTROLLER_BUTTON_A, 0x1000}, {SDL_CONTROLLER_BUTTON_B, 0x2000}, {SDL_CONTROLLER_BUTTON_X, 0x4000},
-    {SDL_CONTROLLER_BUTTON_Y, 0x8000}, {SDL_CONTROLLER_BUTTON_TOUCHPAD, 0x20}, /* touchpad = Back (Pip-Boy menus) */
-  };
   o->buttons = 0;
-  for (unsigned i = 0; i < sizeof map / sizeof *map; i++) if (SDL_GameControllerGetButton(p, map[i].b)) o->buttons |= map[i].x;
+  for (unsigned i = 0; i < sizeof g_btn_map / sizeof *g_btn_map; i++)
+    if (SDL_GameControllerGetButton(p, g_btn_map[i].b)) o->buttons |= g_btn_map[i].x;
+  if (g_tap[index]) { o->buttons |= g_tap[index]; if (++g_tap_reads[index] >= 2) g_tap[index] = 0; }
   int lt = SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_TRIGGERLEFT), rt = SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
   o->lt = (uint8_t)(lt * 255 / 32767); o->rt = (uint8_t)(rt * 255 / 32767);
   int ly = SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_LEFTY), ry = SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_RIGHTY);
