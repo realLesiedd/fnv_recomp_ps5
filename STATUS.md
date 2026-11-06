@@ -150,6 +150,14 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v28, DualSense fixes:** v27's run-time lookup of the pad functions failed on the console ("trigger effects not
+  available"), so no trigger effect was ever sent and turning Light Bar Health off could not hand the light bar
+  back. scePadSetTriggerEffect and scePadResetLightBar are now imported directly (the pad library SDL already
+  imports from), on the handle of the first logged-in user's controller (sceUserServiceGetLoginUserIdList and
+  scePadGetHandle, as SDL opens it); if the reset is refused the light bar is set to the console's blue. Settings >
+  Controls gets Trigger Strength (Light, Medium, Strong, Max; [fnv_recomp] iTriggerStrength, default Strong), and
+  all strengths are higher. "360 Controller" and "Mouse Sensitivity" are taken off the Controls list (the controller
+  is the only input); if the controller had been turned off there it is turned back on first.
 - **v27, 4 GB of game memory, DualSense light bar and adaptive triggers:**
   - **Memory.** The exe is large-address-aware (on 64-bit Windows it gets 4 GB), but the port gave it 2 GB. Its
     address space now goes up to 0xEFFF0000, under the host-function thunks at 0xF0000000 (about 3.75 GB);

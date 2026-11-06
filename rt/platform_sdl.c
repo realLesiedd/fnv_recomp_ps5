@@ -194,47 +194,40 @@ void plat_pad_light(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 #ifdef __PROSPERO__
-/* scePad's trigger effects and light bar reset, which SDL's PS5 driver does not wrap: looked up at run time (a
-   system without them only loses the effect), on the controller SDL opened (scePadGetHandle for the user) */
-int sceKernelLoadStartModule(const char *, size_t, const void *, unsigned, void *, int *);
-int sceKernelDlsym(int, const char *, void **);
-static int (*p_get_handle)(int32_t user, int32_t type, int32_t index), (*p_set_trigger)(int32_t, const void *),
-    (*p_reset_light)(int32_t), (*p_initial_user)(int32_t *);
+/* scePad's trigger effects and light bar reset, which SDL's PS5 driver does not wrap, on the controller SDL opened:
+   scePadGetHandle for the first logged-in user that has one (SDL opens them the same way). Imported directly, from
+   the pad library SDL already imports from (v27 looked them up at run time, and the lookup failed on the console). */
+int scePadGetHandle(int32_t user, int32_t type, int32_t index);
+int scePadSetTriggerEffect(int32_t handle, const void *param);
+int scePadResetLightBar(int32_t handle);
+typedef struct { int32_t user_id[4]; } LoginUsers;
+int sceUserServiceGetLoginUserIdList(LoginUsers *list);
 static int pad_handle(void) {
-  static int done, failures;
-  if (!done) {
-    done = 1;
-    int pad = sceKernelLoadStartModule("libScePad.sprx", 0, 0, 0, 0, 0);
-    int us = sceKernelLoadStartModule("libSceUserService.sprx", 0, 0, 0, 0, 0);
-    void *f = 0;
-    if (pad >= 0 && !sceKernelDlsym(pad, "scePadGetHandle", &f)) p_get_handle = f;
-    f = 0;
-    if (pad >= 0 && !sceKernelDlsym(pad, "scePadSetTriggerEffect", &f)) p_set_trigger = f;
-    f = 0;
-    if (pad >= 0 && !sceKernelDlsym(pad, "scePadResetLightBar", &f)) p_reset_light = f;
-    f = 0;
-    if (us >= 0 && !sceKernelDlsym(us, "sceUserServiceGetInitialUser", &f)) p_initial_user = f;
-    rt_log("dualsense: trigger effects %s", p_get_handle && p_set_trigger && p_initial_user ? "available" : "not available");
+  LoginUsers u;
+  if (sceUserServiceGetLoginUserIdList(&u)) return -1;
+  for (int i = 0; i < 4; i++) {
+    if (u.user_id[i] == -1) continue;
+    int h = scePadGetHandle(u.user_id[i], 0, 0);
+    if (h >= 0) return h;
   }
-  if (!p_get_handle || !p_initial_user || failures > 20) return -1;
-  int32_t user = -1;
-  if (p_initial_user(&user) || user < 0) { failures++; return -1; }
-  int h = p_get_handle(user, 0, 0);
-  if (h < 0) failures++;
-  return h;
+  return -1;
 }
 void plat_pad_light_reset(void) {
   int h = pad_handle();
-  if (h >= 0 && p_reset_light) p_reset_light(h);
+  int r = h >= 0 ? scePadResetLightBar(h) : -1;
+  if (r) {
+    rt_log("dualsense: light bar reset refused (0x%08x); set to blue", (unsigned)r);
+    if (g_pad[0]) SDL_GameControllerSetLED(g_pad[0], 0, 0, 255); /* the console's own colour for player 1 */
+  }
 }
 void plat_pad_triggers(const uint8_t param[120]) {
-  static int refused;
+  static int refused, said;
   if (refused >= 3) return;
   int h = pad_handle();
-  if (h < 0 || !p_set_trigger) return;
-  int r = p_set_trigger(h, param);
+  if (h < 0) return;
+  int r = scePadSetTriggerEffect(h, param);
   if (r && ++refused >= 3) rt_log("dualsense: adaptive triggers refused (0x%08x); off", (unsigned)r);
-  else if (!r) refused = 0;
+  else if (!r) { refused = 0; if (!said++) rt_log("dualsense: trigger effects sent (controller handle %d)", h); }
 }
 #else
 void plat_pad_light_reset(void) {}

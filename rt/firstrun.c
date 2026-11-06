@@ -94,6 +94,7 @@ static const struct { const char *key, *def; } g_own[] = {
   {"iPerfOverlay", "2"},       /* performance overlay: 0 off, 1 basic, 2 detailed (osd.c; Settings > Display) */
   {"iFrameCap", "60"},         /* frame-rate cap: 30 or 60 (osd.c; Settings > Display) */
   {"iAdaptiveTriggers", "1"},  /* DualSense adaptive triggers: 0 off, 1 on (dualsense.c; Settings > Controls) */
+  {"iTriggerStrength", "2"},   /* adaptive trigger strength: 0 light, 1 medium, 2 strong, 3 max (dualsense.c) */
   {"iLightBar", "1"},          /* DualSense light bar shows health: 0 off, 1 on (dualsense.c; Settings > Controls) */
 };
 

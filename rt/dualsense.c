@@ -25,6 +25,7 @@
 #define FORM_WEAPON  0x28
 
 int g_ds_triggers = 1, g_ds_lightbar = 1; /* Settings > Controls (options.c) */
+int g_ds_strength = 2;                    /* Trigger Strength: 0 light, 1 medium, 2 strong, 3 max */
 double g_ds_rumble_time;                  /* when the game last asked for rumble (misc.c) */
 int g_ds_rt;                              /* R2, 0-255, as last read (misc.c) */
 
@@ -39,6 +40,8 @@ static double now_s(void) {
 void ds_init(void) {
   g_ds_triggers = rt_setting_int("iAdaptiveTriggers", 1) != 0;
   g_ds_lightbar = rt_setting_int("iLightBar", 1) != 0;
+  g_ds_strength = rt_setting_int("iTriggerStrength", 2);
+  if (g_ds_strength < 0 || g_ds_strength > 3) g_ds_strength = 2;
 }
 
 /* a vtable must point into the exe's read-only data */
@@ -103,6 +106,13 @@ static void cmd(uint8_t *p, int mode, int a, int b, int c) {
 
 static int is_gun(int type) { return type >= 3 && type <= 9; }
 
+/* a strength given for Max (1-8), scaled by the Trigger Strength setting */
+static int str(int max) {
+  static const float k[4] = {0.4f, 0.65f, 0.85f, 1.0f};
+  int v = (int)(max * k[g_ds_strength] + 0.5f);
+  return v < 1 ? 1 : v > 8 ? 8 : v;
+}
+
 static void triggers(const GameState *s, double t, uint8_t param[120]) {
   memset(param, 0, 120);
   param[0] = 1 | 2;
@@ -110,18 +120,19 @@ static void triggers(const GameState *s, double t, uint8_t param[120]) {
   if (!s->ok || !s->in_game || s->menu || !s->weapon_out || !is_gun(s->weapon_type)) return; /* both off */
   int type = s->weapon_type;
   int firing = g_ds_rt > 100 && t - g_ds_rumble_time < 0.12;
-  cmd(l2, T_FEEDBACK, 2, 2, 0); /* aiming: a light, even push */
-  switch (type) {
-  case 3: cmd(r2, T_WEAPON, 4, 6, 5); break;  /* pistol */
-  case 4: cmd(r2, T_WEAPON, 4, 6, 3); break;  /* energy pistol */
-  case 5: cmd(r2, T_WEAPON, 4, 7, 7); break;  /* rifle */
-  case 6: cmd(r2, T_FEEDBACK, 3, 3, 0); break; /* automatic */
-  case 7: cmd(r2, T_WEAPON, 4, 6, 4); break;  /* energy rifle */
-  case 8: cmd(r2, T_FEEDBACK, 2, 5, 0); break; /* heavy weapon held by a handle */
-  case 9: cmd(r2, T_WEAPON, 3, 7, 8); break;  /* launcher */
+  cmd(l2, T_FEEDBACK, 2, str(5), 0); /* aiming: an even push */
+  switch (type) { /* weapon mode: resists from the start position, gives way at the end position */
+  case 3: cmd(r2, T_WEAPON, 3, 6, str(7)); break;   /* pistol */
+  case 4: cmd(r2, T_WEAPON, 3, 6, str(6)); break;   /* energy pistol */
+  case 5: cmd(r2, T_WEAPON, 3, 7, str(8)); break;   /* rifle */
+  case 6: cmd(r2, T_FEEDBACK, 2, str(6), 0); break; /* automatic */
+  case 7: cmd(r2, T_WEAPON, 3, 6, str(7)); break;   /* energy rifle */
+  case 8: cmd(r2, T_FEEDBACK, 1, str(8), 0); break; /* heavy weapon held by a handle */
+  case 9: cmd(r2, T_WEAPON, 2, 7, str(8)); break;   /* launcher */
   }
   if (firing) { /* the kick */
-    cmd(r2, T_VIBRATION, 2, type == 6 || type == 8 ? 4 : 7, type == 6 || type == 8 ? 25 : 40);
+    int heavy = type == 6 || type == 8;
+    cmd(r2, T_VIBRATION, 2, str(8), heavy ? 30 : 45);
     static int said;
     if (said < 3) { said++; rt_log("dualsense: shot (weapon type %d): trigger kick", type); }
   }

@@ -32,7 +32,7 @@
 
 void rt_prefs_set(const char *sect, const char *key, const char *val); /* firstrun.c */
 extern int g_osd_mode, g_frame_cap;                                    /* osd.c */
-extern int g_ds_triggers, g_ds_lightbar;                               /* dualsense.c */
+extern int g_ds_triggers, g_ds_lightbar, g_ds_strength;                /* dualsense.c */
 
 /* ---- the options ------------------------------------------------------------------------------------ */
 static const u32 g_w[] = {1280, 1920, 2560, 3840}, g_h[] = {720, 1080, 1440, 2160};
@@ -91,6 +91,16 @@ static int onoff_set(int *v, int i, const char *key, const char *what) {
 }
 static int trg_get(void) { return g_ds_triggers ? 1 : 0; }
 static int trg_set(int i) { return onoff_set(&g_ds_triggers, i, "iAdaptiveTriggers", "adaptive triggers"); }
+static int str_get(void) { return g_ds_strength; }
+static int str_set(int i) {
+  if (i != g_ds_strength) {
+    g_ds_strength = i;
+    char v[4]; snprintf(v, sizeof v, "%d", i);
+    rt_prefs_set("fnv_recomp", "iTriggerStrength", v);
+    rt_log("options: trigger strength %d", i);
+  }
+  return 0;
+}
 static int lb_get(void) { return g_ds_lightbar ? 1 : 0; }
 static int lb_set(int i) { return onoff_set(&g_ds_lightbar, i, "iLightBar", "light bar"); }
 
@@ -105,16 +115,17 @@ typedef struct {
   u32 cb;          /* guest address of its callback */
 } PortOption;
 
-static void cb_res(Ctx *c), cb_cap(Ctx *c), cb_osd(Ctx *c), cb_trg(Ctx *c), cb_lb(Ctx *c);
+static void cb_res(Ctx *c), cb_cap(Ctx *c), cb_osd(Ctx *c), cb_trg(Ctx *c), cb_str(Ctx *c), cb_lb(Ctx *c);
 static PortOption g_opts[] = {
   {"Resolution", {"1280 x 720", "1920 x 1080", "2560 x 1440", "3840 x 2160"}, 4, 85, res_get, res_set, 0x10, TEXTURE_SIZE_CB},
   {"Frame Rate Cap", {"30 FPS", "60 FPS"}, 2, 55, cap_get, cap_set, 0x10, 0},
   {"Performance Overlay", {"OFF", "BASIC", "DETAILED"}, 3, 85, osd_get, osd_set, 0x10, 0},
   {"Adaptive Triggers", {"OFF", "ON"}, 2, 0, trg_get, trg_set, 0x40, VIBRATION_CB},
+  {"Trigger Strength", {"LIGHT", "MEDIUM", "STRONG", "MAX"}, 4, 55, str_get, str_set, 0x40, 0},
   {"Light Bar Health", {"OFF", "ON"}, 2, 0, lb_get, lb_set, 0x40, 0},
 };
 #define NOPT (int)(sizeof g_opts / sizeof *g_opts)
-static const HostFn g_cbs[NOPT] = {cb_res, cb_cap, cb_osd, cb_trg, cb_lb};
+static const HostFn g_cbs[NOPT] = {cb_res, cb_cap, cb_osd, cb_trg, cb_str, cb_lb};
 
 static void changed(Ctx *c, PortOption *o) {
   u32 opt = ARG(0), sm = M32(START_MENU);
@@ -136,7 +147,8 @@ static void cb_res(Ctx *c) { changed(c, &g_opts[0]); }
 static void cb_cap(Ctx *c) { changed(c, &g_opts[1]); }
 static void cb_osd(Ctx *c) { changed(c, &g_opts[2]); }
 static void cb_trg(Ctx *c) { changed(c, &g_opts[3]); }
-static void cb_lb(Ctx *c) { changed(c, &g_opts[4]); }
+static void cb_str(Ctx *c) { changed(c, &g_opts[4]); }
+static void cb_lb(Ctx *c) { changed(c, &g_opts[5]); }
 
 /* ---- adding them to the menu ------------------------------------------------------------------------- */
 static int index_of_cb(u32 cb) {
@@ -169,6 +181,18 @@ static void add(Ctx *c, PortOption *o, u32 after_cb) {
   M32(data + 4 * (at + 1)) = obj;
 }
 
+/* the game's PC-only controls, taken off the list: "360 Controller" (the controller is the only input here) and
+   "Mouse Sensitivity" (there is no mouse). Their settings keep their values; the objects are just not listed. The
+   controller is turned back on first if it had been turned off there (0x7D30D0 says whether it is off; 0x719740 on
+   the input globals, 0x4B7210, sets it), or there would be no way back. */
+static void remove_option(u32 cb) {
+  int i = index_of_cb(cb);
+  if (i < 0) return;
+  u32 data = M32(OPTIONS + 4), n = M32(OPTIONS + 8);
+  for (u32 k = (u32)i; k + 1 < n; k++) M32(data + 4 * k) = M32(data + 4 * (k + 1));
+  M32(OPTIONS + 8) = n - 1;
+}
+
 /* called when the start menu is set up (from its init hook, before the original runs). The guest calls change
    eax/ecx/edx, which the original init still needs (ecx is its this), so they are put back. */
 void port_options_install(Ctx *c) {
@@ -186,10 +210,17 @@ void port_options_install(Ctx *c) {
     add(c, &g_opts[i], after);
     after = g_opts[i].cb;
   }
+  if (index_of_cb(0x7D2FC0u) >= 0 && (rt_call_guest(c, 0x7D30D0u, 0, NULL) & 0xFF)) { /* the gamepad was turned off */
+    u32 input = rt_call_guest(c, 0x4B7210u, 0, NULL), off = 0;
+    if (input) { c->r[1] = input; rt_call_guest(c, 0x719740u, 1, &off); rt_log("options: the controller had been turned off; turned back on"); }
+  }
+  remove_option(0x7D2FC0u); /* 360 Controller */
+  remove_option(0x7D2EB0u); /* Mouse Sensitivity */
   c->r[0] = eax; c->r[1] = ecx; c->r[2] = edx;
   if (added)
     rt_log("options: Settings > Display: Resolution (now %ux%u), Frame Rate Cap (%d), Performance Overlay (%s); "
-           "Settings > Controls: Adaptive Triggers (%s), Light Bar Health (%s) added",
+           "Settings > Controls: Adaptive Triggers (%s), Trigger Strength, Light Bar Health (%s) added; 360 Controller and "
+           "Mouse Sensitivity removed",
            M32(SET_ISIZE_W + 4), M32(SET_ISIZE_H + 4), g_frame_cap, g_osd_mode == 0 ? "off" : g_osd_mode == 1 ? "basic" : "detailed",
            g_ds_triggers ? "on" : "off", g_ds_lightbar ? "on" : "off");
 }
