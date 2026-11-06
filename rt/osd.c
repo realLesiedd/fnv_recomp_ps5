@@ -21,6 +21,7 @@
  * refresh sets the pace and the two do not fight. */
 #define _GNU_SOURCE
 #include "rt.h"
+#include <errno.h>
 #include "d3d9_internal.h"
 #include <time.h>
 #include <stdio.h>
@@ -75,7 +76,7 @@ void osd_frame_limit(void) {
     if (wait > 0.1) wait = 0.1;
     if (wait > 0.0015) { /* sleep most of it, then spin: sleeps overshoot by up to a millisecond */
       struct timespec ts = {0, (long)((wait - 0.001) * 1e9)};
-      nanosleep(&ts, NULL);
+      while (nanosleep(&ts, &ts) && errno == EINTR) {} /* the profiler's signal can cut a sleep short */
     }
     while ((t = now_s()) < next) {}
   }

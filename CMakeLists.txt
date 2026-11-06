@@ -11,6 +11,14 @@ file(GLOB GEN_SOURCES ${CMAKE_SOURCE_DIR}/gen/funcs_*.c)
 add_library(fnv_gen OBJECT ${GEN_SOURCES} gen/table.c gen/image.c)
 # -O1 keeps compile time reasonable for ~370 MB of generated C; locals still get registers.
 set_source_files_properties(${GEN_SOURCES} PROPERTIES COMPILE_OPTIONS "-O1;-g0;-w;-fno-strict-aliasing;-fwrapv")
+# The files that hold most of the main thread's game-code time are built at -O2 (tools/hot_gen_files.txt).
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tools/hot_gen_files.txt)
+file(STRINGS ${CMAKE_SOURCE_DIR}/tools/hot_gen_files.txt HOT_GEN REGEX "^funcs_")
+foreach(f ${HOT_GEN})
+  if(EXISTS ${CMAKE_SOURCE_DIR}/gen/${f})
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/gen/${f} PROPERTIES COMPILE_OPTIONS "-O2;-g0;-w;-fno-strict-aliasing;-fwrapv")
+  endif()
+endforeach()
 target_include_directories(fnv_gen PRIVATE rt)
 
 file(GLOB RT_SOURCES ${CMAKE_SOURCE_DIR}/rt/*.c)

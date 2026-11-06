@@ -23,7 +23,7 @@
 #include <ucontext.h>
 #endif
 
-#define FNV_RELEASE "v35" /* printed at the top of the log so a log shows which build produced it */
+#define FNV_RELEASE "v36" /* printed at the top of the log so a log shows which build produced it */
 
 int g_trace;
 u32 g_peb;
@@ -694,7 +694,14 @@ static void *heartbeat(void *arg) {
   }
   return NULL;
 }
+/* the host thread running guest thread t, once it has started (prof.c samples thread 0) */
+int rt_thread_handle(int t, pthread_t *out) {
+  if (t < 0 || t >= MAXTHR || !g_pth_set[t]) return 0;
+  *out = g_pth[t];
+  return 1;
+}
 void rt_heartbeat_start(void) {
+  { extern void rt_prof_start(void); rt_prof_start(); }
   g_coarse_now = mono_now();
   pthread_t th;
   pthread_attr_t at;

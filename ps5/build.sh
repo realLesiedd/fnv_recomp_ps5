@@ -33,9 +33,14 @@ mkdir -p "$obj/gen" "$obj/rt"
 
 echo "==> [compile] recompiled game code (gen/, the long part)"
 gflags="-O1 -g0 -w -fno-strict-aliasing -fwrapv -ffunction-sections -I$root/rt"
+# The files in tools/hot_gen_files.txt (most of the main thread's game-code time) are built at -O2; a file taken
+# off that list is rebuilt at -O1 only when it changes or its object is deleted.
+hot=$root/tools/hot_gen_files.txt
 ls "$root"/gen/*.c | xargs -P "$jobs" -I{} sh -c '
-  o="'"$obj"'/gen/$(basename "{}" .c).o"
-  [ "$o" -nt "{}" ] && [ "$o" -nt "'"$root"'/rt/x86.h" ] || sh "$tri/tooling/prospero-clang18" -c '"$gflags"' "{}" -o "$o" || exit 255'
+  o="'"$obj"'/gen/$(basename "{}" .c).o"; fl="'"$gflags"'"; dep=/dev/null
+  if grep -qx "$(basename "{}")" "'"$hot"'"; then fl=$(echo "$fl" | sed "s/-O1/-O2/"); dep="'"$hot"'"; fi
+  [ "$o" -nt "{}" ] && [ "$o" -nt "'"$root"'/rt/x86.h" ] && { [ "$dep" = /dev/null ] || [ "$o" -nt "$dep" ]; } ||
+    sh "$tri/tooling/prospero-clang18" -c $fl "{}" -o "$o" || exit 255'
 
 echo "==> [compile] runtime"
 rflags="-O2 -g -Wall -Wno-unused-function -Wno-unknown-pragmas -Wno-unreachable-code-generic-assoc -fno-strict-aliasing -fwrapv -fno-omit-frame-pointer -I$root/rt -I$pac/user/homebrew/include -I$sdk/target/include"

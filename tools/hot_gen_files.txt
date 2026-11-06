@@ -1,0 +1,32 @@
+# Generated files compiled at -O2 (the rest of gen/ is -O1). They held most of the main
+# thread's game-code time in a profile of a Primm save in play (v36). One name per line.
+funcs_000.c
+funcs_001.c
+funcs_003.c
+funcs_004.c
+funcs_005.c
+funcs_006.c
+funcs_007.c
+funcs_009.c
+funcs_010.c
+funcs_012.c
+funcs_017.c
+funcs_021.c
+funcs_028.c
+funcs_054.c
+funcs_057.c
+funcs_063.c
+funcs_064.c
+funcs_068.c
+funcs_069.c
+funcs_070.c
+funcs_075.c
+funcs_078.c
+funcs_079.c
+funcs_081.c
+funcs_083.c
+funcs_085.c
+funcs_113.c
+funcs_114.c
+funcs_115.c
+funcs_117.c

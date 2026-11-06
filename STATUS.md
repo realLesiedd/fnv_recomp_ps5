@@ -154,6 +154,25 @@ Superseded as a plan. Written before the PS5 build played, and left as it was. A
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v36, a save-load hang fixed, and the first speed-up:**
+  - Loading a save could hang (the owner hit it pressing Continue on v35): three game threads in a lock cycle,
+    with the game's threaded FaceGen as the link. Main held critical section 0x11C5CF0 building a face
+    (GetOrCreateFaceGenModel) and waited for the FaceGen lock 0x11D5A9C; BSTaskManagerThread held that and spun on
+    a game spinlock (0x40FBF0) while freeing memory; BackgroundCloneThread held the spinlock and waited for
+    0x11C5CF0. Reproduced 3 of 3 with the owner's Primm save. [BackgroundLoad] bUseMultiThreadedFaceGen=0 is now
+    forced on every launch (rt/firstrun.c), and the same save loaded every time. A lock wait over 5 s is now
+    logged with the holder and both guest stacks (cs wait lines).
+  - Button presses are latched until the game has read them twice, so a tap during a hitch is not lost.
+  - The 30 gen/ files that held ~80% of the main thread's game-code time in a Primm profile are built at -O2
+    (tools/hot_gen_files.txt; the rest stay -O1). Same busy Primm view (~1,700 draws a frame, Linux, software
+    renderer): main thread 87.4% -> 76.1% at the 60 fps cap. No faults, hangs or lock waits in that run.
+  - A built-in profiler (rt/prof.c) samples the main thread ~200 times a second and logs a split once a minute:
+    game code, port runtime (this runtime and the D3D9 layer), DXVK/driver/libraries, system (incl. waiting),
+    with the hottest game functions and offsets for the rest. On by default; [fnv_recomp] iProfiler=0 turns it off.
+    On Linux the link puts the runtime after gen/, so it is counted under libraries there; the PS5 link order
+    (runtime, then gen/, then DXVK and the driver) is what the groups assume.
+  - The game's optional threading switches (threaded AI, morpher, particles, blood, audio) were measured: no
+    change in main-thread load in that view (87.0% vs 87.4%), ~15% more CPU on other cores. Left off.
 - **v35:** Trigger Strength spread out, since Light still felt strong: the scale on each
   weapon's Max strength is 0.15 / 0.3 / 0.55 / 1.0 (was 0.4 / 0.65 / 0.85 / 1.0), so a pistol's resistance is
   1 / 2 / 4 / 7 out of 8 for Light / Medium / Strong / Max.
