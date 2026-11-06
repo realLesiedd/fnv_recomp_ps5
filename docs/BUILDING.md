@@ -57,4 +57,5 @@ Compiling `gen/` takes about 20 CPU-minutes.
 Each guest function at `0xADDR` becomes `void f_ADDR(Ctx *c)`. Calls push the real return address on the guest
 stack, so the stack layout matches the original, and `ret` returns from the C function.
 
-Progress notes for each version are in [STATUS.md](../STATUS.md).
+Progress notes for each version are in [STATUS.md](../STATUS.md). The phased plans are at the end of that file.
+Questions the tree does not answer are in [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md).

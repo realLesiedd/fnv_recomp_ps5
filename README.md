@@ -33,7 +33,8 @@ files.
 - **Native 4K.** Renders at 3840×2160 by default, with a Resolution option for 1080p, 1440p and 720p.
 - **Frame Rate Cap** of 30 or 60 FPS. It applies straight away and leaves the game's physics alone.
 - **Performance overlay** with three levels (off, basic, detailed). The detailed view has a frame-time graph,
-  1% lows, the load on each CPU core, GPU load, memory use and temperatures.
+  1% lows, CPU load, GPU load, memory use and temperatures. Per-core load is included when the system reports it.
+  On PS5 that source (`kern.cp_times`) is not available, so the row is left out.
 - **DualSense support.**
   - PlayStation button prompts throughout the menus, HUD and Pip-Boy, drawn in the style of the PS3 version.
   - Adaptive triggers that react to the equipped weapon, with four strength levels.
@@ -134,7 +135,8 @@ The PC-only options 360 Controller and Mouse Sensitivity are removed.
 
 - The frame rate can drop below 60 in busy areas.
 - Stutters can happen the first time an area or effect is seen, while its shaders are compiled.
-- After standing still for a long time the frame rate can dip. This is being investigated.
+- After standing still for a long time the frame rate can dip. A long session in [STATUS.md](STATUS.md) (v35)
+  ties that dip to the draw count, which that note reads as the idle camera. Memory stays flat.
 - Trophies, a mods folder and NVSE plugins are not supported yet.
 
 Progress notes for each version are in [STATUS.md](STATUS.md).
@@ -162,7 +164,8 @@ Open an issue with what happened, what you were doing, and your `fnv.log`.
 
 Building needs your own `FalloutNV.exe`, because the recompiler generates the game's C code from it. See
 [docs/BUILDING.md](docs/BUILDING.md) for the recompiler and the Linux build, and [ps5/README.md](ps5/README.md) for
-the PS5 app.
+the PS5 app. What is left to build, and the questions still open, are in [STATUS.md](STATUS.md#future-plans) and
+[docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md).
 
 ## Credits
 
