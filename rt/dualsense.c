@@ -106,9 +106,10 @@ static void cmd(uint8_t *p, int mode, int a, int b, int c) {
 
 static int is_gun(int type) { return type >= 3 && type <= 9; }
 
-/* a strength given for Max (1-8), scaled by the Trigger Strength setting */
+/* a strength given for Max (1-8), scaled by the Trigger Strength setting. Light is the gentlest the pad
+   does (1) and each step about doubles: pistol 1/2/4/7, rifle 1/2/4/8, aim (L2) 1/2/3/5 */
 static int str(int max) {
-  static const float k[4] = {0.4f, 0.65f, 0.85f, 1.0f};
+  static const float k[4] = {0.15f, 0.3f, 0.55f, 1.0f};
   int v = (int)(max * k[g_ds_strength] + 0.5f);
   return v < 1 ? 1 : v > 8 ? 8 : v;
 }
