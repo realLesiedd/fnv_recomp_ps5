@@ -154,6 +154,13 @@ Superseded as a plan. Written before the PS5 build played, and left as it was. A
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v37:** v36 crashed at exactly 60 s on both of the owner's launches, in the profiler's own thread right after its
+  first summary (SIGBUS in libc's strstr): on the console dladdr fails for most addresses, and the profiler then
+  read the name out of an uninitialised Dl_info, which the first summary's snprintf had left non-null. The same
+  failure had put every non-game sample under "system". The profiler now sorts samples by address alone: the app
+  image runs from __dso_handle to __init_array_start on PS5 (runtime, then gen/, then DXVK, RADV, SDL, FFmpeg),
+  and everything else is the system. Its offsets are addresses in build-ps5/llvm-pie.elf. Before the crash, v36
+  ran at 56-60 fps with the main thread at 83-100%.
 - **v36, a save-load hang fixed, and the first speed-up:**
   - Loading a save could hang (the owner hit it pressing Continue on v35): three game threads in a lock cycle,
     with the game's threaded FaceGen as the link. Main held critical section 0x11C5CF0 building a face

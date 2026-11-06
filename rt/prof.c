@@ -7,15 +7,15 @@
  *   libraries   what is linked after gen/: DXVK, RADV, SDL, FFmpeg, libc++ (on Linux: the shared libraries)
  *   system      the console's own modules (libkernel, libc): system calls and waiting
  *
- * with the hottest game functions by guest address, and the hottest places in the other groups as offsets into
- * their module (symbolized offline against the build: on PS5 llvm-pie.elf, minus 0x400000).
+ * with the hottest game functions by guest address, and the hottest places in the other groups as offsets from the
+ * start of the app (on PS5 those are addresses in build-ps5/llvm-pie.elf; system ones are absolute). Groups are told
+ * apart by address alone (no symbol lookup, which on the console fails for most addresses).
  * [fnv_recomp] iProfiler=0 in FalloutPrefs.ini turns it off. */
 #define _GNU_SOURCE
 #include "rt.h"
 #include "loader.h"
 #include <signal.h>
 #include <pthread.h>
-#include <dlfcn.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
@@ -82,15 +82,36 @@ static int top(const Slot *t, int want, int *idx) { /* the want biggest counts, 
   return got;
 }
 
+/* the app's own image: on PS5 __dso_handle is its first byte and __init_array_start lies past its code; the
+   Linux linker defines __executable_start and etext */
+#ifdef __PROSPERO__
+extern char __dso_handle[], __init_array_start[];
+#define APP_LO ((u64)__dso_handle)
+#define APP_HI ((u64)__init_array_start)
+#else
+extern char __executable_start[], etext[];
+#define APP_LO ((u64)__executable_start)
+#define APP_HI ((u64)etext)
+#endif
+
+static void log_top(const char *what, const Slot *t, u32 total, int game_names) {
+  int idx[12], k = top(t, game_names ? 12 : 8, idx);
+  char b[700];
+  int o = snprintf(b, sizeof b, "prof: %s:", what);
+  for (int i = 0; i < k && o < (int)sizeof b - 40; i++)
+    o += snprintf(b + o, sizeof b - o, game_names ? " %08llx %.1f%%" : " %llx %.1f%%", (unsigned long long)t[idx[i]].key,
+                  100.0 * t[idx[i]].n / total);
+  rt_log("%s", b);
+}
+
 static void *prof_main(void *arg) {
   (void)arg;
   pthread_t main_th;
   while (!rt_thread_handle(0, &main_th)) { struct timespec d = {0, 50000000}; nanosleep(&d, NULL); }
-  Dl_info self;
-  void *app_base = dladdr((void *)&prof_main, &self) ? self.dli_fbase : NULL;
+  const u64 app_lo = APP_LO, app_hi = APP_HI;
   enum { GAME, PORT, LIBS, SYS, NGROUP };
   static const char *names[NGROUP] = {"game code", "port runtime", "DXVK/driver/libraries", "system (incl. waiting)"};
-  static Slot game[TOPN], port[TOPN], libs[TOPN];
+  static Slot game[TOPN], port[TOPN], libs[TOPN], sys[TOPN];
   u32 n[NGROUP] = {0}, total = 0, rd = __atomic_load_n(&g_wr, __ATOMIC_ACQUIRE);
   struct timespec t0;
   clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -100,41 +121,27 @@ static void *prof_main(void *arg) {
     pthread_kill(main_th, SIGUSR1);
     u32 wr = __atomic_load_n(&g_wr, __ATOMIC_ACQUIRE);
     if (wr - rd > RING) rd = wr - RING;
-    for (; rd != wr; rd++) {
+    for (; rd != wr; rd++) { /* by address only: nothing here can fault on an odd pc */
       u64 pc = g_ring[rd & (RING - 1)];
       total++;
-      if (pc >= g_gen_lo && pc < g_gen_hi) { n[GAME]++; count(game, guest_of(pc)); continue; }
-      Dl_info di;
-      if (dladdr((void *)pc, &di) && di.dli_fbase == app_base) {
-        if (pc < g_gen_lo) { n[PORT]++; count(port, (pc - (u64)app_base) & ~0xFFull); }
-        else { n[LIBS]++; count(libs, (pc - (u64)app_base) & ~0xFFull); }
-      } else if (di.dli_fname && (strstr(di.dli_fname, "dxvk") || strstr(di.dli_fname, "vulkan") ||
-                                  strstr(di.dli_fname, "lvp") || strstr(di.dli_fname, "SDL") || strstr(di.dli_fname, "LLVM"))) {
-        n[LIBS]++; count(libs, pc & ~0xFFull);
-      } else n[SYS]++;
+      if (pc >= g_gen_lo && pc < g_gen_hi) { n[GAME]++; count(game, guest_of(pc)); }
+      else if (pc >= app_lo && pc < g_gen_lo) { n[PORT]++; count(port, (pc - app_lo) & ~0xFFull); }
+      else if (pc >= g_gen_hi && pc < app_hi) { n[LIBS]++; count(libs, (pc - app_lo) & ~0xFFull); }
+      else { n[SYS]++; count(sys, pc & ~0xFFull); }
     }
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     double el = (t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) / 1e9;
     if (el < 60 || !total) continue;
-    char b[700];
+    char b[400];
     int o = snprintf(b, sizeof b, "prof: main thread, %.0f s, %u samples:", el, total);
     for (int g = 0; g < NGROUP; g++) o += snprintf(b + o, sizeof b - o, "%s %s %.1f%%", g ? "," : "", names[g], 100.0 * n[g] / total);
     rt_log("%s", b);
-    int idx[12], k;
-    k = top(game, 12, idx);
-    o = snprintf(b, sizeof b, "prof: game code top:");
-    for (int i = 0; i < k; i++) o += snprintf(b + o, sizeof b - o, " %08llx %.1f%%", (unsigned long long)game[idx[i]].key, 100.0 * game[idx[i]].n / total);
-    rt_log("%s", b);
-    k = top(port, 8, idx);
-    o = snprintf(b, sizeof b, "prof: port top (offset in app):");
-    for (int i = 0; i < k; i++) o += snprintf(b + o, sizeof b - o, " +%llx %.1f%%", (unsigned long long)port[idx[i]].key, 100.0 * port[idx[i]].n / total);
-    rt_log("%s", b);
-    k = top(libs, 8, idx);
-    o = snprintf(b, sizeof b, "prof: libraries top (offset in app):");
-    for (int i = 0; i < k; i++) o += snprintf(b + o, sizeof b - o, " +%llx %.1f%%", (unsigned long long)libs[idx[i]].key, 100.0 * libs[idx[i]].n / total);
-    rt_log("%s", b);
-    memset(game, 0, sizeof game); memset(port, 0, sizeof port); memset(libs, 0, sizeof libs);
+    log_top("game code top (guest function)", game, total, 1);
+    log_top("port top (offset in app)", port, total, 0);
+    log_top("libraries top (offset in app)", libs, total, 0);
+    log_top("system top (address)", sys, total, 0);
+    memset(game, 0, sizeof game); memset(port, 0, sizeof port); memset(libs, 0, sizeof libs); memset(sys, 0, sizeof sys);
     memset(n, 0, sizeof n); total = 0; t0 = t;
   }
   return NULL;
