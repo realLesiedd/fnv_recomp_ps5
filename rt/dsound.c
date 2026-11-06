@@ -47,6 +47,9 @@ typedef struct {
   u32 mode;
   int nnotify;
   u32 n_off[MAX_NOTIFY], n_ev[MAX_NOTIFY];
+  int traced;                        /* a logged one-shot: log what happens to it until it ends */
+  float peak_out;                    /* loudest sample it put in the mix, and frames mixed */
+  u32 mixed;
 } Buf;
 
 static Buf g_buf[MAX_BUFS];
@@ -86,6 +89,9 @@ static void notify_stop(Buf *b) {
     if (b->n_off[k] == DSBPN_OFFSETSTOP) rt_event_set(b->n_ev[k]);
 }
 static void free_buf(Buf *b) { /* g_mx held */
+  if (b->traced && b->playing)
+    rt_log("audio: end buf %d: released while playing, %u frames mixed, loudest %.0f", (int)(b - g_buf), b->mixed, b->peak_out);
+  b->traced = 0;
   if (b->data && --b->data->refs == 0) { heap_free(b->data->guest); free(b->data); }
   if (b->obj) heap_free(b->obj);
   if (b->obj3d) heap_free(b->obj3d);
@@ -153,14 +159,16 @@ static void mix(int16_t *out, int frames) {
     const u8 *d = HP(b->data->guest);
     double step = (double)b->freq / g_rate, pos = b->pos;
     u32 from = cursor_bytes(b);
-    int stereo = b->channels == 2;
-    for (int k = 0; k < frames; k++) {
+    int stereo = b->channels == 2, tr = b->traced, k = 0;
+    float pk = 0;
+    for (; k < frames; k++) {
       u32 i0 = (u32)pos, i1 = i0 + 1 < b->frames ? i0 + 1 : (b->looping ? 0 : i0);
       float t = (float)(pos - i0);
       float s0 = sample(d, b, i0, 0), s1 = sample(d, b, i1, 0), sl = s0 + (s1 - s0) * t, sr = sl;
       if (stereo) { s0 = sample(d, b, i0, 1); s1 = sample(d, b, i1, 1); sr = s0 + (s1 - s0) * t; }
       acc[2 * k] += sl * gl;
       acc[2 * k + 1] += sr * gr;
+      if (tr) { float a = fabsf(sl * gl), e = fabsf(sr * gr); if (a > pk) pk = a; if (e > pk) pk = e; }
       pos += step;
       if (pos >= b->frames) {
         if (b->looping) { while (pos >= b->frames) pos -= b->frames; }
@@ -168,6 +176,15 @@ static void mix(int16_t *out, int frames) {
       }
     }
     b->pos = pos;
+    if (tr) {
+      b->mixed += k;
+      if (pk > b->peak_out) b->peak_out = pk;
+      if (!b->playing) {
+        rt_log("audio: end buf %d: played to the end, %u frames mixed, loudest %.0f (gain %.3f/%.3f, freq %u)", i, b->mixed,
+               b->peak_out, gl, gr, b->freq);
+        b->traced = 0;
+      }
+    }
     if (b->nnotify) {
       if (b->playing) notify_range(b, from, cursor_bytes(b));
       else { notify_range(b, from, b->data->bytes); notify_stop(b); }
@@ -361,9 +378,11 @@ API(b_Play) {
       gains(b, &gl, &gr);
       u32 pc = M32(0x11DEA3C); /* the player; +0x64B is its third-person flag (the game's own check, 0x524D10) */
       rt_log("audio: play buf %d %u bytes vol %d mode %u p(%.0f,%.0f,%.0f) listener(%.0f,%.0f,%.0f) min %.0f max %.0f "
-             "flags %x gain %.3f/%.3f %s person", (int)(b - g_buf), b->data ? b->data->bytes : 0, b->volume, b->mode, b->p[0],
-             b->p[1], b->p[2], g_lis.p[0], g_lis.p[1], g_lis.p[2], b->mind, b->maxd, b->flags, gl, gr,
+             "flags %x gain %.3f/%.3f freq %u/%d pan %d %dch %dbit %s person", (int)(b - g_buf), b->data ? b->data->bytes : 0, b->volume,
+             b->mode, b->p[0], b->p[1], b->p[2], g_lis.p[0], g_lis.p[1], g_lis.p[2], b->mind, b->maxd, b->flags, gl, gr, b->freq,
+             b->rate, b->pan, b->channels, b->bits,
              !pc ? "no" : M8(pc + 0x64B) ? "third" : "first");
+      b->traced = 1; b->peak_out = 0; b->mixed = 0;
     }
   }
   pthread_mutex_unlock(&g_mx);
@@ -373,6 +392,7 @@ API(b_SetCurrentPosition) {
   pthread_mutex_lock(&g_mx);
   Buf *b = B(c);
   if (b && b->block) b->pos = (double)(ARG(1) / b->block) < b->frames ? (double)(ARG(1) / b->block) : 0;
+  if (b && b->traced && b->playing) rt_log("audio: buf %d moved to byte %u while playing", (int)(b - g_buf), ARG(1));
   pthread_mutex_unlock(&g_mx);
   RETURN_STD(2, DS_OK);
 }
@@ -380,20 +400,39 @@ API(b_SetVolume) {
   int v = (int)ARG(1);
   v = v < -10000 ? -10000 : v > 0 ? 0 : v;
   Buf *b = B(c);
+  if (b && b->traced && b->playing && !b->primary && v != b->volume)
+    rt_log("audio: buf %d volume %d -> %d while playing", (int)(b - g_buf), b->volume, v);
   if (b) { if (b->primary) g_master = v; else b->volume = v; }
   RETURN_STD(2, DS_OK);
 }
-API(b_SetPan) { int v = (int)ARG(1); Buf *b = B(c); if (b) b->pan = v < -10000 ? -10000 : v > 10000 ? 10000 : v; RETURN_STD(2, DS_OK); }
+API(b_SetPan) {
+  int v = (int)ARG(1);
+  Buf *b = B(c);
+  v = v < -10000 ? -10000 : v > 10000 ? 10000 : v;
+  if (b && b->traced && b->playing && v != b->pan) rt_log("audio: buf %d pan %d -> %d while playing", (int)(b - g_buf), b->pan, v);
+  if (b) b->pan = v;
+  RETURN_STD(2, DS_OK);
+}
 API(b_SetFrequency) {
   u32 f = ARG(1);
   Buf *b = B(c);
-  if (b) b->freq = f ? (f < 100 ? 100 : f > 200000 ? 200000 : f) : (u32)b->rate;
+  u32 nf = f ? (f < 100 ? 100 : f > 200000 ? 200000 : f) : 0;
+  if (b && !nf) nf = (u32)b->rate;
+  if (b && b->traced && b->playing && nf != b->freq)
+    rt_log("audio: buf %d frequency %u -> %u while playing (asked %u)", (int)(b - g_buf), b->freq, nf, f);
+  if (b) b->freq = nf;
   RETURN_STD(2, DS_OK);
 }
 API(b_Stop) {
   pthread_mutex_lock(&g_mx);
   Buf *b = B(c);
-  if (b && b->playing) { b->playing = 0; notify_stop(b); }
+  if (b && b->playing) {
+    if (b->traced) {
+      rt_log("audio: end buf %d: stopped by the game, %u frames mixed, loudest %.0f", (int)(b - g_buf), b->mixed, b->peak_out);
+      b->traced = 0;
+    }
+    b->playing = 0; notify_stop(b);
+  }
   pthread_mutex_unlock(&g_mx);
   RETURN_STD(1, DS_OK);
 }

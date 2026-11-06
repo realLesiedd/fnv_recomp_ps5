@@ -154,6 +154,13 @@ Superseded as a plan. Written before the PS5 build played, and left as it was. A
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v40, footstep sounds traced to the end:** the owner's v39 log (PS5, Goodsprings, both views) showed the game
+  starting flat (2D) footstep sounds every ~0.42 s in both views at audible volume (first person: a pair, one at
+  full volume and one at about -15 dB; third person: one), and PlayFootstepImpact (0x8391B0) never called. On
+  Linux the first-person pair plays to the end and is mixed at an audible level. v40 follows each logged sound
+  until it ends (rt/dsound.c): volume, pan and pitch changes while it plays, how it ended (played out, stopped,
+  released) and the loudest sample it put in the mix. The play line also gives pitch, pan and format. Per-core CPU
+  on PS5 13.42: sceKernelGetCpuUsage returns 0x8002004e, so that row stays hidden (#3).
 - **v39, diagnostics for silent first-person footsteps:** the owner hears no footsteps in first person on PS5
   (grass and road, Goodsprings); third person works. On Linux with the owner's Goodsprings save, in first person
   (player +0x64B, the flag the game's own 0x524D10 reads, was 0), walking starts pairs of 2D sounds every ~0.45 s at
