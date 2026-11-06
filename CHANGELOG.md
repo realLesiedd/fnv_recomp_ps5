@@ -6,11 +6,11 @@ What changed in each version, for players. The newest version is at the top. Thi
 
 - A hidden debug menu is in testing. It has not been tried on the PS5 yet. It stays off unless `FalloutPrefs.ini` has `bDebugMenu=1` under `[fnv_recomp]`. Settings > Controls then adds rows to pick a place and go there, give a test kit, and turn god mode and noclip on or off.
 - Release packaging is in testing. It has not been tried on the PS5 yet. The home screen version follows the build name. This build shows 01.041.000, and the zip is named `PPSA97701-v41.zip`.
-- A v40 log shows why first-person footsteps are hard to hear. First person uses a quieter flat sound. Third person uses a louder sound at your feet. The audio sliders barely change the quieter sound.
 
 ## v40
 
 - The log now follows each recorded sound until it ends. On a desktop test, the first-person footsteps play through.
+- The v40 log explained why first-person footsteps are quiet.
 - On PS5 system software 13.42 the console does not report per-core load, so that overlay row stays hidden. Linux still shows it.
 
 ## v39

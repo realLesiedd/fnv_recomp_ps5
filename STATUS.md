@@ -19,10 +19,12 @@ Later notes override earlier ones where they disagree. Three early plan lists ar
 - #12 mods and #13 trophies (not needed for the first release).
 
 **Blocked**
-- #4 120 Hz (needs a RADV rebuild).
-- #3 per-core CPU (13.42 refuses it; the issue is closed).
+- #4 120 Hz (planned: a RADV cherry-pick plus a 120 Hz TV test).
 - Two or three outside testers (the owner has to find them).
 - The message to fnv_decomp (the owner sends it).
+
+**Won't fix**
+- won't fix: 13.42 doesn't report per-core load (closed).
 
 ## Working (tested with the GOG FalloutNV.exe 1.4.0.525)
 
