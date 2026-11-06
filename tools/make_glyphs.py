@@ -45,6 +45,9 @@ BOXES = {
     'glow_general_button_ls': (20, 16, 42, 28), 'glow_general_button_rs': (19, 17, 44, 29),
     'glow_general_button_start': (28, 26, 38, 38), 'glow_general_button_back': (25, 26, 35, 38),
 }
+# where each face button's arc begins (its inner edge at mid height): symbols keep 2 pixels clear of it
+ARC = {'general_button_a': 37, 'general_button_b': 36, 'general_button_x': 37, 'general_button_y': 37,
+       'glow_general_button_a': 36, 'glow_general_button_b': 36, 'glow_general_button_x': 35, 'glow_general_button_y': 35}
 KIND = {'a': 'cross', 'b': 'circle', 'x': 'square', 'y': 'triangle', 'lb': 'L1', 'rb': 'R1', 'lt': 'L2', 'rt': 'R2',
         'ls': 'L3', 'rs': 'R3', 'start': 'options', 'back': 'create'}
 
@@ -53,26 +56,30 @@ def S(v):
     return v * SS
 
 
-def draw(kind, box):
+def draw(kind, box, arc=None):
     """our symbol or lettering in the letters' box: body coverage, 64x64, 0-255"""
     x0, y0, x1, y1 = box
     cx, cy, h, w = (x0 + x1 + 1) / 2, (y0 + y1 + 1) / 2, y1 - y0 + 1, x1 - x0 + 1
+    if arc is not None:  # the PS3's symbols are wider than the Xbox letters: move left to keep clear of the arc
+        r = h / 2 * 0.98
+        half = {'cross': r * 1.02, 'circle': r * 1.20, 'square': r * 1.04, 'triangle': r * 1.16}[kind] + SW / 2
+        cx = min(cx, arc - 2 - half)
     im = Image.new('L', (64 * SS, 64 * SS), 0)
     d = ImageDraw.Draw(im)
     r = h / 2 * 0.98
     W = int(S(SW))
     if kind == 'cross':
-        k = r * 0.90
+        k = r * 1.02
         d.line([S(cx - k), S(cy - k), S(cx + k), S(cy + k)], fill=255, width=W)
         d.line([S(cx - k), S(cy + k), S(cx + k), S(cy - k)], fill=255, width=W)
     elif kind == 'circle':
-        rr = r * 0.98
+        rr = r * 1.20
         d.ellipse([S(cx - rr), S(cy - rr), S(cx + rr), S(cy + rr)], outline=255, width=W)
     elif kind == 'square':
-        k = r * 0.86
+        k = r * 1.04
         d.rectangle([S(cx - k), S(cy - k), S(cx + k), S(cy + k)], outline=255, width=W)
     elif kind == 'triangle':
-        t = r * 1.06
+        t = r * 1.16
         d.polygon([(S(cx), S(cy - t * 1.05)), (S(cx + t), S(cy + t * 0.8)), (S(cx - t), S(cy + t * 0.8))], outline=255, width=W)
     elif kind == 'options':  # three lines
         for dy in (-4.2, 0, 4.2):
@@ -121,12 +128,12 @@ def outline(shapes, inset):
 def draw_whole(kind):
     """a whole icon, centred in the cell"""
     cy = 31.5
-    if kind in ('L1', 'R1'):  # a flat rectangle
-        im = outline([(15, 20.5, 49, 42.5, 3.5)], LW)
-        t, at = text_in(None, kind, 32, cy, 11, 24)
+    if kind in ('L1', 'R1'):  # a rectangle about 4:3, its name in bold filling it (as the PS3 draws L1/R1)
+        im = outline([(14, 18, 50, 45, 3.5)], 2.4)
+        t, at = text_in(None, kind, 32, cy, 15, 23)
     elif kind in ('L2', 'R2'):  # a taller rounded box
-        im = outline([(19, 15, 45, 48, 7)], LW)
-        t, at = text_in(None, kind, 32, cy + 0.5, 10, 18)
+        im = outline([(17, 13, 47, 50, 7)], 2.4)
+        t, at = text_in(None, kind, 32, cy + 0.5, 13, 21)
     elif kind in ('L3', 'R3'):  # a stick: a wide cap on a stem, its letter in the cap
         im = outline([(12, 17, 52, 35, 8), (25, 31, 39, 46, 2)], LW)
         t, at = text_in(None, kind[0], 32, 26, 10, 12)
@@ -161,7 +168,7 @@ def main():
         glow = name.startswith('glow_')
         kind = KIND[name.split('_')[-1]]
         whole = kind not in ('cross', 'circle', 'square', 'triangle')
-        body = draw_whole(kind) if whole else draw(kind, box)
+        body = draw_whole(kind) if whole else draw(kind, box, ARC.get(name))
         data = bytes([(1 if glow else 0) | (2 if whole else 0)]) + body.tobytes() + (glow_of(body).tobytes() if glow else b'')
         with open(os.path.join(out, name + '.cell'), 'wb') as f:
             f.write(data)
