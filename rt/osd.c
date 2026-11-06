@@ -6,7 +6,8 @@
  *   FPS    frame rate over the last half second, and the 1% low (the 99th percentile frame time of ~5 s, as fps)
  *   FRAME  frame time, and a graph of the last 240 frames with 30 and 60 fps lines
  *   CPU    the game's main thread (the usual limit for this game) and the whole process in cores; PS5 CPU temperature
- *   CORES  each processor core's load, as a bar with its percentage (kern.cp_times on the PS5, /proc/stat on Linux)
+ *   CORES  each processor core's load, as a bar with its percentage (sceKernelGetCpuUsage on the PS5,
+ *          /proc/stat on Linux; the row is hidden when the PS5 call fails)
  *   GPU    busy share from DXVK's GPU idle time (our DXVK patch), shaders being compiled (a stutter's usual cause);
  *          PS5 SoC temperature
  *   VRAM   video memory in use and available (VK_EXT_memory_budget)
@@ -30,11 +31,14 @@
 #include <sys/resource.h>
 #ifdef __PROSPERO__
 #include <ps5platform/kernel.h>
-int sysctlbyname(const char *name, void *old, size_t *oldlen, const void *new_, size_t newlen); /* per-core load */
-/* temperatures: imported directly (v26-v28 looked them up at run time, which fails on the console, as it did for
-   the pad's trigger functions); a call that is refused just leaves the reading out */
+#include <stdint.h>
+#include <sys/mman.h>
+/* temperatures and per-core load: imported directly (a run-time lookup fails on the console, as it did for the
+   pad's trigger functions). A refused call leaves that reading out. */
 int sceKernelGetCpuTemperature(int *temp);
 int sceKernelGetSocSensorTemperature(int sensor, int *temp);
+int sceKernelGetCpuUsage(void *entries, int32_t *count);
+int sceKernelGetThreadName(uint32_t tid, char *name);
 static int (*p_cpu_temp)(int *) = sceKernelGetCpuTemperature;
 static int (*p_soc_temp)(int, int *) = sceKernelGetSocSensorTemperature;
 static void temp_init(void) {
@@ -102,25 +106,129 @@ static struct {
 
 /* per-core load since the last call, 0-100; returns the number of cores, 0 if unknown */
 #define MAXCORES 16
+#ifdef __PROSPERO__
+/* One thread's run time from sceKernelGetCpuUsage: pid, tid, then user and system time as seconds + microseconds.
+   40 bytes. The same layout is what ps5-hwinfo, ps5-exporter and the Common FPS HUD pass. */
+struct ps5_thread {
+  uint32_t pid, tid;
+  int64_t user_sec, user_usec, sys_sec, sys_usec;
+};
+_Static_assert(sizeof(struct ps5_thread) == 40, "sceKernelGetCpuUsage entry is 40 bytes");
+#define PS5_THREADS 3072
+
+static int ps5_idle_lane(uint32_t tid) {
+  char name[0x40];
+  memset(name, 0, sizeof name);
+  if (sceKernelGetThreadName(tid, name) != 0) return -1;
+  name[sizeof name - 1] = 0;
+  if (!strcmp(name, "SceIdleCpuRv")) return 13; /* logical CPU 13 is named this, not SceIdleCpu13 */
+  int lane = -1;
+  if (sscanf(name, "SceIdleCpu%d", &lane) == 1 && lane >= 0 && lane < MAXCORES && lane != 13) return lane;
+  return -1;
+}
+
+/* Load of each logical CPU, from its idle thread: load = 1 - idle time / wall time.
+   Writes cumulative busy and total microseconds for the shared delta below. Returns 0 if the row should stay hidden. */
+static int ps5_core_times(unsigned long long busy[MAXCORES], unsigned long long total[MAXCORES]) {
+  static struct ps5_thread *list;
+  static uint32_t idle_tid[MAXCORES];
+  static unsigned long long last_idle[MAXCORES], last_wall, acc_t, acc_b[MAXCORES];
+  static int ready, no_idle, logged_ok, logged_fail;
+  if (no_idle) return 0;
+  if (!list) {
+    size_t bytes = (sizeof(struct ps5_thread) * PS5_THREADS + 16383u) & ~(size_t)16383u;
+    void *map = mmap(NULL, bytes + 16384, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (map == MAP_FAILED || mprotect((char *)map + bytes, 16384, PROT_NONE) != 0) {
+      if (map != MAP_FAILED) munmap(map, bytes + 16384);
+      if (!logged_fail++) rt_log("overlay: per-core CPU load not available on this system");
+      return 0;
+    }
+    list = map;
+  }
+  int32_t count = PS5_THREADS;
+  int rc = sceKernelGetCpuUsage(list, &count);
+  if (rc != 0 || count <= 0 || count > PS5_THREADS) {
+    if (!logged_ok && !logged_fail++) {
+      if (rc != 0) rt_log("overlay: per-core CPU load not available on this system (sceKernelGetCpuUsage 0x%x)", (unsigned)rc);
+      else rt_log("overlay: per-core CPU load not available on this system (sceKernelGetCpuUsage returned %d threads)", count);
+    }
+    return 0;
+  }
+  int missing = 0, known = 0;
+  for (int l = 0; l < MAXCORES; l++) if (!idle_tid[l]) missing = 1; else known++;
+  if (missing) {
+    for (int32_t i = 0; i < count && known < MAXCORES; i++) {
+      int seen = 0;
+      for (int l = 0; l < MAXCORES; l++) if (idle_tid[l] == list[i].tid) { seen = 1; break; }
+      if (seen) continue;
+      int lane = ps5_idle_lane(list[i].tid);
+      if (lane >= 0 && !idle_tid[lane]) { idle_tid[lane] = list[i].tid; known++; }
+    }
+  }
+  unsigned long long idle_us[MAXCORES];
+  int found = 0;
+  for (int l = 0; l < MAXCORES; l++) {
+    int hit = 0;
+    idle_us[l] = 0;
+    if (idle_tid[l]) {
+      for (int32_t i = 0; i < count; i++) {
+        if (list[i].tid != idle_tid[l]) continue;
+        long long us = (list[i].user_sec + list[i].sys_sec) * 1000000LL + list[i].user_usec + list[i].sys_usec;
+        if (us < 0) us = 0;
+        idle_us[l] = (unsigned long long)us;
+        hit = 1;
+        found++;
+        break;
+      }
+    }
+    if (!hit) idle_tid[l] = 0;
+  }
+  if (found != MAXCORES) {
+    /* A list that does not name every idle thread will not grow them later, so stop walking names each sample.
+       A cached id that vanished is tried once more (it is cleared above, so the next call walks names) and then given up. */
+    if (missing) {
+      no_idle = 1;
+      if (!logged_fail++)
+        rt_log("overlay: per-core CPU load not available on this system (sceKernelGetCpuUsage listed %d threads, %d idle)",
+               count, found);
+    }
+    return 0;
+  }
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+    if (!logged_ok && !logged_fail++) rt_log("overlay: per-core CPU load not available on this system");
+    return 0;
+  }
+  unsigned long long wall = (unsigned long long)ts.tv_sec * 1000000ull + (unsigned long long)(ts.tv_nsec / 1000ull);
+  if (!ready) {
+    ready = 1;
+    last_wall = wall;
+    acc_t = 1;
+    for (int i = 0; i < MAXCORES; i++) { last_idle[i] = idle_us[i]; acc_b[i] = 0; total[i] = 1; busy[i] = 0; }
+  } else {
+    unsigned long long dw = wall > last_wall ? wall - last_wall : 1;
+    last_wall = wall;
+    acc_t += dw;
+    for (int i = 0; i < MAXCORES; i++) {
+      unsigned long long di = idle_us[i] > last_idle[i] ? idle_us[i] - last_idle[i] : 0;
+      last_idle[i] = idle_us[i];
+      if (di > dw) di = dw;
+      acc_b[i] += dw - di;
+      total[i] = acc_t;
+      busy[i] = acc_b[i];
+    }
+  }
+  if (!logged_ok++) rt_log("overlay: per-core CPU load from sceKernelGetCpuUsage (%d logical CPUs)", MAXCORES);
+  return MAXCORES;
+}
+#endif
 static int core_loads(int pct[MAXCORES]) {
   static unsigned long long prev_busy[MAXCORES], prev_total[MAXCORES];
   unsigned long long busy[MAXCORES], total[MAXCORES];
   int n = 0;
 #ifdef __PROSPERO__
-  /* FreeBSD: kern.cp_times, per core: user, nice, system, interrupt, idle ticks */
-  long t[MAXCORES * 5];
-  size_t len = sizeof t;
-  static int said;
-  if (sysctlbyname("kern.cp_times", t, &len, NULL, 0) != 0 || len < 5 * sizeof(long)) {
-    if (!said++) rt_log("overlay: per-core CPU load not available on this system");
-    return 0;
-  }
-  if (!said++) rt_log("overlay: per-core CPU load from kern.cp_times (%d cores)", (int)(len / (5 * sizeof(long))));
-  n = (int)(len / (5 * sizeof(long)));
-  for (int i = 0; i < n; i++) {
-    unsigned long long u = t[i * 5], ni = t[i * 5 + 1], sy = t[i * 5 + 2], in = t[i * 5 + 3], id = t[i * 5 + 4];
-    busy[i] = u + ni + sy + in; total[i] = busy[i] + id;
-  }
+  n = ps5_core_times(busy, total);
+  if (!n) return 0;
 #else
   FILE *f = fopen("/proc/stat", "r");
   if (!f) return 0;
