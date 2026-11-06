@@ -251,9 +251,26 @@ static void level_for_surface(Obj *s, Level *L) {
     L->cache = s->cache[0][0];
   }
 }
+static int guest_is_target(u32 g) {
+  if (!D || !g) return 0;
+  for (int i = 0; i < 4; i++) if (D->rt[i] == g) return 1;
+  return D->ds == g;
+}
 static void invalidate_cache(Obj *o) {
   if (!o) return;
   for (int f = 0; f < 6; f++) o->dirty[f] = 0xffffffffu; /* GPU backend: re-upload */
+  /* The texture walk uploads sampler textures. A level bound as a target is uploaded from host_surface
+     on the target walk, so that walk has to run too when this object is one of the current targets. */
+  if (D && (o->kind == K_SURFACE || o->kind == K_TEXTURE || o->kind == K_CUBE || o->kind == K_VOLUME)) {
+    D->dirty |= D_TEX;
+    if (o->kind == K_SURFACE) {
+      if (guest_is_target(o->guest)) D->dirty |= D_RT;
+    } else {
+      for (int f = 0; f < 6 && !(D->dirty & D_RT); f++)
+        for (int l = 0; l < MAXLVL; l++)
+          if (guest_is_target(o->sub[f][l])) { D->dirty |= D_RT; break; }
+    }
+  }
   for (int f = 0; f < 6; f++) for (int l = 0; l < MAXLVL; l++) if (o->cache[f][l]) { free(o->cache[f][l]); o->cache[f][l] = NULL; }
 }
 

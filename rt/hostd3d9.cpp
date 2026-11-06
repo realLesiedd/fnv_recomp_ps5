@@ -347,6 +347,8 @@ static IDirect3DVertexDeclaration9 *host_decl(Obj *o) {
 extern "C" void hb_release(Obj *o) {
   if (!o->host) return;
   DevState *D = d3d_dev();
+  /* the next host object can be handed the same pointer; every binding group has to be walked again */
+  if (D) dev_dirty_bind(D);
   if (D && (o->guest == D->backbuffer || o->guest == D->depth)) { o->host = NULL; return; }
   ((IUnknown *)o->host)->Release();
   o->host = NULL;
@@ -391,18 +393,101 @@ static void sync_consts(T (*cur)[4], T (*sh)[4], int n, F set) {
   }
 }
 
+/* One count per binding group per sync: walked when its bit was set, skipped otherwise.
+   Same thread as the draw timers, reported on the slow-frame line, cleared with them. */
+static thread_local unsigned g_sync_walked, g_sync_skipped;
+
+/* FNV_SYNC_CHECK=1: after the fast path, compare each slot with what the old walk would have bound.
+   Read once. Off costs a single predictable branch. The first 50 mismatches are logged. */
+static int g_sync_check = -1;
+static int g_sync_notes;
+
+static void sync_note(const char *kind, int slot) {
+  if (g_sync_notes >= 50) return;
+  g_sync_notes++;
+  rt_log("sync check: %s slot %d stale", kind, slot);
+}
+
+/* What host_texture / host_vb would do, without creating or uploading.
+   Pending means the old walk would have created the host object or copied new bytes. */
+static int tex_bytes_pending(Obj *t) {
+  if (!t || t->kind == K_SURFACE) return 0;
+  if (t->usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)) return t->host == NULL;
+  if (!t->host) return 1;
+  return (t->dirty[0] | t->dirty[1] | t->dirty[2] | t->dirty[3] | t->dirty[4] | t->dirty[5]) != 0;
+}
+static int buf_bytes_pending(Obj *o) {
+  if (!o) return 0;
+  if (!o->host) return 1;
+  return o->dirty_hi > o->dirty_lo;
+}
+static void *surface_bound(DevState *D, u32 guest, int *pending) {
+  *pending = 0;
+  if (!guest) return NULL;
+  Obj *s = d3d_obj(guest);
+  if (!s) return NULL;
+  if (s->guest == D->backbuffer) return g_host_bb;
+  if (s->guest == D->depth) return g_host_depth;
+  if (s->parent) {
+    Obj *t = d3d_obj(s->parent);
+    if (tex_bytes_pending(t)) *pending = 1; /* host_surface uploads the parent texture */
+  }
+  if (!s->host) { *pending = 1; return NULL; }
+  return s->host;
+}
+static void sync_check(DevState *D) {
+  for (int i = 0; i < 4; i++) {
+    int pending = 0;
+    void *hs = surface_bound(D, D->rt[i], &pending);
+    if (i == 0 && !hs && !pending) hs = g_host_bb;
+    if (pending || hs != S->rt[i]) sync_note("render target", i);
+  }
+  int pending = 0;
+  void *ds = surface_bound(D, D->ds, &pending);
+  if (pending || ds != S->ds) sync_note("depth", 0);
+  for (int s = 0; s < 20; s++) {
+    Obj *t = D->tex[s] ? d3d_obj(D->tex[s]) : NULL;
+    void *ht = (t && t->kind != K_SURFACE) ? t->host : NULL;
+    if (tex_bytes_pending(t) || ht != S->tex[s]) sync_note("texture", s);
+  }
+  for (int i = 0; i < 16; i++) {
+    Obj *o = D->stream[i] ? d3d_obj(D->stream[i]) : NULL;
+    void *vb = o ? o->host : NULL;
+    if (buf_bytes_pending(o) || vb != S->stream[i] || D->stream_off[i] != S->off[i] || D->stream_stride[i] != S->stride[i])
+      sync_note("stream", i);
+    if (D->stream_freq[i] != S->freq[i]) sync_note("stream freq", i);
+  }
+  Obj *ib_o = D->indices ? d3d_obj(D->indices) : NULL;
+  void *ib = ib_o ? ib_o->host : NULL;
+  if (buf_bytes_pending(ib_o) || ib != S->ib) sync_note("index buffer", 0);
+  Obj *vs_o = D->vs ? d3d_obj(D->vs) : NULL;
+  void *vs = vs_o ? vs_o->host : NULL;
+  if ((vs_o && !vs_o->host) || vs != S->vs) sync_note("vertex shader", 0);
+  Obj *ps_o = D->ps ? d3d_obj(D->ps) : NULL;
+  void *ps = ps_o ? ps_o->host : NULL;
+  if ((ps_o && !ps_o->host) || ps != S->ps) sync_note("pixel shader", 0);
+  if (D->decl) {
+    Obj *o = d3d_obj(D->decl);
+    void *decl = o ? o->host : NULL;
+    if (!decl || decl != S->decl) sync_note("declaration", 0);
+  } else if (D->fvf != S->fvf || S->decl) sync_note("fvf", 0);
+}
+
 static void sync_state(void) {
   DevState *D = d3d_dev();
   /* only the kinds of state the game changed since the last draw (D->dirty, set by the D3D9 setters) are walked */
   /* render targets first: SetRenderTarget resets the viewport */
   bool rt_changed = false;
-  for (int i = 0; i < 4; i++) {
-    IDirect3DSurface9 *s = D->rt[i] ? host_surface(d3d_obj(D->rt[i])) : NULL;
-    if (i == 0 && !s) s = g_host_bb;
-    if (s != S->rt[i]) { g_dev->SetRenderTarget(i, s); S->rt[i] = s; rt_changed = true; }
-  }
-  IDirect3DSurface9 *ds = D->ds ? host_surface(d3d_obj(D->ds)) : NULL;
-  if (ds != S->ds) { g_dev->SetDepthStencilSurface(ds); S->ds = ds; }
+  if (D->dirty & D_RT) {
+    g_sync_walked++;
+    for (int i = 0; i < 4; i++) {
+      IDirect3DSurface9 *s = D->rt[i] ? host_surface(d3d_obj(D->rt[i])) : NULL;
+      if (i == 0 && !s) s = g_host_bb;
+      if (s != S->rt[i]) { g_dev->SetRenderTarget(i, s); S->rt[i] = s; rt_changed = true; }
+    }
+    IDirect3DSurface9 *ds = D->ds ? host_surface(d3d_obj(D->ds)) : NULL;
+    if (ds != S->ds) { g_dev->SetDepthStencilSurface(ds); S->ds = ds; }
+  } else g_sync_skipped++;
   if (rt_changed || (D->dirty & D_VIEW)) {
     D3DVIEWPORT9 vp;
     memcpy(&vp, D->viewport, sizeof vp);
@@ -422,29 +507,44 @@ static void sync_state(void) {
     for (int s = 0; s < 8; s++)
       for (int t = 1; t < 33; t++)
         if (D->tss_set[s][t] && D->tss[s][t] != S->tss[s][t]) { g_dev->SetTextureStageState(s, (D3DTEXTURESTAGESTATETYPE)t, D->tss[s][t]); S->tss[s][t] = D->tss[s][t]; }
-  for (int s = 0; s < 20; s++) {
-    Obj *t = D->tex[s] ? d3d_obj(D->tex[s]) : NULL;
-    IDirect3DBaseTexture9 *ht = (t && t->kind != K_SURFACE) ? host_texture(t) : NULL;
-    if (ht != S->tex[s]) { g_dev->SetTexture(sampler_stage(s), ht); S->tex[s] = ht; }
-  }
-  for (int i = 0; i < 16; i++) {
-    IDirect3DVertexBuffer9 *vb = D->stream[i] ? host_vb(d3d_obj(D->stream[i])) : NULL;
-    if (vb != S->stream[i] || D->stream_off[i] != S->off[i] || D->stream_stride[i] != S->stride[i]) {
-      g_dev->SetStreamSource(i, vb, D->stream_off[i], D->stream_stride[i]);
-      S->stream[i] = vb; S->off[i] = D->stream_off[i]; S->stride[i] = D->stream_stride[i];
+  if (D->dirty & D_TEX) {
+    g_sync_walked++;
+    for (int s = 0; s < 20; s++) {
+      Obj *t = D->tex[s] ? d3d_obj(D->tex[s]) : NULL;
+      IDirect3DBaseTexture9 *ht = (t && t->kind != K_SURFACE) ? host_texture(t) : NULL;
+      if (ht != S->tex[s]) { g_dev->SetTexture(sampler_stage(s), ht); S->tex[s] = ht; }
     }
-    if (D->stream_freq[i] != S->freq[i]) { g_dev->SetStreamSourceFreq(i, D->stream_freq[i]); S->freq[i] = D->stream_freq[i]; }
+  } else g_sync_skipped++;
+  IDirect3DVertexShader9 *vs;
+  IDirect3DPixelShader9 *ps;
+  if (D->dirty & D_BUF) {
+    g_sync_walked++;
+    for (int i = 0; i < 16; i++) {
+      IDirect3DVertexBuffer9 *vb = D->stream[i] ? host_vb(d3d_obj(D->stream[i])) : NULL;
+      if (vb != S->stream[i] || D->stream_off[i] != S->off[i] || D->stream_stride[i] != S->stride[i]) {
+        g_dev->SetStreamSource(i, vb, D->stream_off[i], D->stream_stride[i]);
+        S->stream[i] = vb; S->off[i] = D->stream_off[i]; S->stride[i] = D->stream_stride[i];
+      }
+      if (D->stream_freq[i] != S->freq[i]) { g_dev->SetStreamSourceFreq(i, D->stream_freq[i]); S->freq[i] = D->stream_freq[i]; }
+    }
+    IDirect3DIndexBuffer9 *ib = D->indices ? host_ib(d3d_obj(D->indices)) : NULL;
+    if (ib != S->ib) { g_dev->SetIndices(ib); S->ib = ib; }
+  } else g_sync_skipped++;
+  if (D->dirty & D_SH) {
+    g_sync_walked++;
+    vs = D->vs ? host_vs(d3d_obj(D->vs)) : NULL;
+    if (vs != S->vs) { g_dev->SetVertexShader(vs); S->vs = vs; }
+    ps = D->ps ? host_ps(d3d_obj(D->ps)) : NULL;
+    if (ps != S->ps) { g_dev->SetPixelShader(ps); S->ps = ps; }
+    IDirect3DVertexDeclaration9 *decl = D->decl ? host_decl(d3d_obj(D->decl)) : NULL;
+    if (decl) {
+      if (decl != S->decl) { g_dev->SetVertexDeclaration(decl); S->decl = decl; S->fvf = 0xffffffffu; }
+    } else if (D->fvf != S->fvf) { g_dev->SetFVF(D->fvf); S->fvf = D->fvf; S->decl = NULL; }
+  } else {
+    g_sync_skipped++;
+    vs = (IDirect3DVertexShader9 *)S->vs;
+    ps = (IDirect3DPixelShader9 *)S->ps;
   }
-  IDirect3DIndexBuffer9 *ib = D->indices ? host_ib(d3d_obj(D->indices)) : NULL;
-  if (ib != S->ib) { g_dev->SetIndices(ib); S->ib = ib; }
-  IDirect3DVertexShader9 *vs = D->vs ? host_vs(d3d_obj(D->vs)) : NULL;
-  if (vs != S->vs) { g_dev->SetVertexShader(vs); S->vs = vs; }
-  IDirect3DPixelShader9 *ps = D->ps ? host_ps(d3d_obj(D->ps)) : NULL;
-  if (ps != S->ps) { g_dev->SetPixelShader(ps); S->ps = ps; }
-  IDirect3DVertexDeclaration9 *decl = D->decl ? host_decl(d3d_obj(D->decl)) : NULL;
-  if (decl) {
-    if (decl != S->decl) { g_dev->SetVertexDeclaration(decl); S->decl = decl; S->fvf = 0xffffffffu; }
-  } else if (D->fvf != S->fvf) { g_dev->SetFVF(D->fvf); S->fvf = D->fvf; S->decl = NULL; }
 
   if ((D->dirty & D_VSF) && D->vsf_hi > D->vsf_lo)
     sync_consts(D->vsf + D->vsf_lo, S->vsf + D->vsf_lo, (int)(D->vsf_hi - D->vsf_lo),
@@ -476,6 +576,14 @@ static void sync_state(void) {
     if (D->dirty & D_MAT) g_dev->SetMaterial((const D3DMATERIAL9 *)D->material);
   }
   D->dirty &= ~synced;
+  if (g_sync_check) { /* -1 until the first draw, then 0 or 1; off is this one branch */
+    if (g_sync_check < 0) {
+      const char *e = getenv("FNV_SYNC_CHECK");
+      g_sync_check = e && atoi(e) ? 1 : 0;
+      if (!g_sync_check) return;
+    }
+    sync_check(D);
+  }
 }
 
 /* ---------------------------------------------------------------- drawing */
@@ -603,12 +711,13 @@ extern "C" void hb_frame_end(double frame_ms, double present_ms, double cpu_ms, 
     if (cpu_ms >= 0) snprintf(busy, sizeof busy, " (presenting thread busy %.0f ms)", cpu_ms);
     rt_log("slow frame: %.0f ms%s = draws %.0f ms (%u) + creating GPU objects %.0f ms (%u) + "
            "uploads %.0f ms (%u) + other device calls %.0f ms + Present %.0f ms + game %.0f ms; D3D objects %d created, "
-           "%d freed; %.1f MB read",
+           "%d freed; %.1f MB read; sync walked/skipped %u/%u",
            frame_ms, busy, d, t_cnt[T_DRAW], cr, t_cnt[T_CREATE], up, t_cnt[T_UPLOAD], ot, present_ms,
-           rest > 0 ? rest : 0, created, destroyed, mb_read);
+           rest > 0 ? rest : 0, created, destroyed, mb_read, g_sync_walked, g_sync_skipped);
   }
   memset(t_acc, 0, sizeof t_acc);
   memset(t_cnt, 0, sizeof t_cnt);
+  g_sync_walked = g_sync_skipped = 0;
 }
 
 extern "C" void hb_present(void) {

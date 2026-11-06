@@ -50,9 +50,11 @@ typedef struct {
   u32 dirty;                     /* GPU backend: kinds of state changed since the last draw (D_*) */
   u32 vsf_lo, vsf_hi, psf_lo, psf_hi; /* GPU backend: float constant registers changed since the last draw */
 } DevState;
+/* D_RT targets (render targets and the depth surface), D_TEX textures, D_BUF vertex/index buffers, D_SH shaders. */
 enum { D_RS = 1, D_SS = 2, D_TSS = 4, D_VSF = 8, D_PSF = 16, D_CONSTIB = 32, D_XFORM = 64, D_VIEW = 128, D_MAT = 256,
-       D_ALL = 0x1FF };
+       D_RT = 512, D_TEX = 1024, D_BUF = 2048, D_SH = 4096, D_ALL = 0x1FFF };
 static inline void dev_dirty_all(DevState *D) { D->dirty = D_ALL; D->vsf_lo = 0; D->vsf_hi = 256; D->psf_lo = 0; D->psf_hi = 224; }
+static inline void dev_dirty_bind(DevState *D) { D->dirty |= D_RT | D_TEX | D_BUF | D_SH; }
 
 Obj *d3d_obj(u32 guest);
 DevState *d3d_dev(void);

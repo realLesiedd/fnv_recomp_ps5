@@ -24,6 +24,8 @@ static float asf(u32 v) { float f; memcpy(&f, &v, 4); return f; }
 #include "d3d9_internal.h"
 #include <time.h>
 static void invalidate_cache(struct Obj *o);
+static DevState *D;
+static void bind_dirty(void) { if (D) dev_dirty_bind(D); }
 
 /* id -> Obj, in chunks allocated as ids are handed out (a flat table cost 8 MB of host memory up front);
    chunks are never freed, so lookups need no lock */
@@ -65,7 +67,7 @@ static Obj *obj(u32 g) {
 
 Obj *d3d_obj(u32 g) { return obj(g); }
 static void free_storage(Obj *o) {
-  if (o->host) hb_release(o);
+  if (o->host) { bind_dirty(); hb_release(o); } /* a new host object can reuse this pointer */
   for (int f = 0; f < 6; f++)
     for (int l = 0; l < MAXLVL; l++) {
       if (o->data[f][l] && !o->parent) heap_free(o->data[f][l]);
@@ -80,7 +82,6 @@ static void free_storage(Obj *o) {
    go to the texture, so a bound surface keeps its texture alive), and the device holds a reference on everything
    bound to it. When the count reaches zero the object and its GPU copy are freed. */
 static u32 g_device;
-static DevState *D;
 static u32 ref_owner(u32 g) {
   Obj *o = obj(g);
   return o && o->parent ? o->parent : g;
@@ -111,10 +112,12 @@ static void destroy_obj(u32 g) {
   static int n_bound;
   int w = bound_where(g);
   if (w && n_bound++ < 50) rt_log("D3D9: object %08x (kind %d) released to 0 while bound (%d)", g, o->kind, w);
+  if (o->host) bind_dirty();
   for (int f = 0; f < 6; f++) /* a texture's surfaces go with it; their GPU copies hold the GPU texture */
     for (int l = 0; l < MAXLVL; l++) {
       Obj *s = o->sub[f][l] ? obj(o->sub[f][l]) : NULL;
       o->sub[f][l] = 0;
+      if (s && s->host) bind_dirty();
       if (s) { free_storage(s); drop_obj(s); }
     }
   free_storage(o);
@@ -321,6 +324,7 @@ static u32 make_texture(int kind, u32 w, u32 h, u32 d, u32 levels, u32 usage, u3
       lw = lw > 1 ? lw / 2 : 1; lh = lh > 1 ? lh / 2 : 1; ld = ld > 1 ? ld / 2 : 1;
     }
   }
+  if (D) D->dirty |= D_TEX; /* uploaded on the next texture walk, once something binds it */
   return g;
 }
 static u32 lvl_w(Obj *o, u32 l) { u32 w = o->w >> l; return w ? w : 1; }
@@ -389,7 +393,7 @@ API(vol_GetLevelDesc) {
   RETURN_STD(3, S_OK);
 }
 API(vol_LockBox) {
-  Obj *o = obj(COM_THIS); u32 l = ARG(1), lb = ARG(2);
+  Obj *o = obj(COM_THIS); u32 l = ARG(1), lb = ARG(2); invalidate_cache(o);
   u32 slice = o->pitch[l] * (is_dxt(o->fmt) ? (lvl_h(o, l) + 3) / 4 : lvl_h(o, l));
   M32(lb) = o->pitch[l]; M32(lb + 4) = slice; M32(lb + 8) = o->data[0][l];
   RETURN_STD(5, S_OK);
@@ -427,6 +431,7 @@ API(b_Lock) {
   if (o->dirty_hi <= o->dirty_lo) { o->dirty_lo = off; o->dirty_hi = end; }
   else { if (off < o->dirty_lo) o->dirty_lo = off; if (end > o->dirty_hi) o->dirty_hi = end; }
   if (ARG(4) & 0x2000) o->discard = 1; /* D3DLOCK_DISCARD: the GPU may still be reading the old contents */
+  if (D) D->dirty |= D_BUF; /* same binding, new bytes: the buffer walk uploads */
   M32(ARG(3)) = o->data[0][0] + (off < o->size ? off : 0);
   RETURN_STD(5, S_OK);
 }
@@ -585,6 +590,7 @@ static u32 make_buffer(int kind, u32 len, u32 usage, u32 fmt_or_fvf, u32 pool) {
   if (kind == K_VB) o->fvf = fmt_or_fvf; else o->fmt = fmt_or_fvf;
   o->data[0][0] = heap_alloc(len ? len : 4, 0);
   o->dirty_lo = 0; o->dirty_hi = len;
+  if (D) D->dirty |= D_BUF;
   return g;
 }
 API(d_CreateVertexBuffer) { M32(ARG(5)) = make_buffer(K_VB, ARG(1), ARG(2), ARG(3), ARG(4)); RETURN_STD(7, S_OK); }
@@ -599,7 +605,10 @@ static void copy_surface(u32 src, u32 dst) {
   u32 sd = d3d_storage(s, 0, 0), dd = d3d_storage(d, 0, 0);
   for (u32 y = 0; y < rows; y++) memcpy(HP(dd + y * d->pitch[0]), HP(sd + y * s->pitch[0]), s->pitch[0] < d->pitch[0] ? s->pitch[0] : d->pitch[0]);
 }
-API(d_UpdateSurface) { invalidate_cache(obj(ARG(3))); copy_surface(ARG(1), ARG(3)); RETURN_STD(5, S_OK); }
+API(d_UpdateSurface) {
+  Obj *d = obj(ARG(3)); invalidate_cache(d); if (d && d->parent) invalidate_cache(obj(d->parent));
+  copy_surface(ARG(1), ARG(3)); RETURN_STD(5, S_OK);
+}
 API(d_UpdateTexture) {
   Obj *s = obj(ARG(1)), *d = obj(ARG(2)); invalidate_cache(d);
   if (s && d && s->fmt == d->fmt && s->w == d->w && s->h == d->h) {
@@ -616,9 +625,9 @@ API(d_GetRenderTargetData) { if (hb_active()) hb_readback(obj(ARG(1)), obj(ARG(2
 API(d_GetFrontBufferData) { RETURN_STD(3, S_OK); }
 API(d_StretchRect) { if (hb_active()) hb_stretch(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5)); else swr_stretch(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5)); DUMP("StretchRect %08x -> %08x filter %u", ARG(1), ARG(3), ARG(5)); RETURN_STD(6, S_OK); }
 API(d_ColorFill) { if (hb_active()) hb_colorfill(ARG(1), ARG(2), ARG(3)); else swr_colorfill(ARG(1), ARG(2), ARG(3)); RETURN_STD(4, S_OK); }
-API(d_SetRenderTarget) { u32 i = ARG(1); { Obj *o = obj(ARG(2)); DUMP("SetRenderTarget %u = %08x %ux%u fmt %u", i, ARG(2), o ? o->w : 0, o ? o->h : 0, o ? o->fmt : 0); } if (i < 4) set_ref(&D->rt[i], ARG(2)); RETURN_STD(3, S_OK); }
+API(d_SetRenderTarget) { u32 i = ARG(1); { Obj *o = obj(ARG(2)); DUMP("SetRenderTarget %u = %08x %ux%u fmt %u", i, ARG(2), o ? o->w : 0, o ? o->h : 0, o ? o->fmt : 0); } if (i < 4) { set_ref(&D->rt[i], ARG(2)); D->dirty |= D_RT; } RETURN_STD(3, S_OK); }
 API(d_GetRenderTarget) { u32 i = ARG(1); if (i >= 4 || !D->rt[i]) { M32(ARG(2)) = 0; RETURN_STD(3, 0x8876086Cu); } get_ref(ARG(2), D->rt[i]); RETURN_STD(3, S_OK); }
-API(d_SetDepthStencilSurface) { set_ref(&D->ds, ARG(1)); RETURN_STD(2, S_OK); }
+API(d_SetDepthStencilSurface) { set_ref(&D->ds, ARG(1)); D->dirty |= D_RT; RETURN_STD(2, S_OK); }
 API(d_GetDepthStencilSurface) { if (!D->ds) { M32(ARG(1)) = 0; RETURN_STD(2, 0x8876086Cu); } get_ref(ARG(1), D->ds); RETURN_STD(2, S_OK); }
 API(d_BeginScene) { D->in_scene = 1; RETURN_STD(1, S_OK); }
 API(d_EndScene) { D->in_scene = 0; RETURN_STD(1, S_OK); }
@@ -645,7 +654,7 @@ API(d_SetClipStatus) { RETURN_STD(2, S_OK); }
 API(d_GetClipStatus) { memset(HP(ARG(1)), 0, 8); RETURN_STD(2, S_OK); }
 static u32 sampler_index(u32 s) { return s >= 257 ? 16 + (s - 257) : s; } /* D3DDMAPSAMPLER, D3DVERTEXTEXTURESAMPLER0..3 */
 API(d_GetTexture) { u32 s = sampler_index(ARG(1)); get_ref(ARG(2), s < 20 ? D->tex[s] : 0); RETURN_STD(3, S_OK); }
-API(d_SetTexture) { u32 s = sampler_index(ARG(1)); if (s < 20) set_ref(&D->tex[s], ARG(2)); RETURN_STD(3, S_OK); }
+API(d_SetTexture) { u32 s = sampler_index(ARG(1)); if (s < 20) { set_ref(&D->tex[s], ARG(2)); D->dirty |= D_TEX; } RETURN_STD(3, S_OK); }
 API(d_GetTextureStageState) { u32 s = ARG(1), t = ARG(2); M32(ARG(3)) = (s < 8 && t < 33) ? D->tss[s][t] : 0; RETURN_STD(4, S_OK); }
 API(d_SetTextureStageState) { u32 s = ARG(1), t = ARG(2); if (s < 8 && t < 33) { D->tss[s][t] = ARG(3); D->tss_set[s][t] = 1; D->dirty |= D_TSS; } RETURN_STD(4, S_OK); }
 API(d_GetSamplerState) { u32 s = sampler_index(ARG(1)), t = ARG(2); M32(ARG(3)) = (s < 20 && t < 14) ? D->ss[s][t] : 0; RETURN_STD(4, S_OK); }
@@ -661,8 +670,8 @@ static u32 prim_vertices(u32 type, u32 n) {
 }
 API(d_DrawPrimitive) { dump_draw("DrawPrimitive", ARG(1), ARG(3)); if (hb_active()) hb_draw(ARG(1), 0, 0, 0, ARG(2), ARG(3), 0, 0, 0, 0, 0); else swr_draw(ARG(1), 0, 0, 0, ARG(2), ARG(3), 0, 0, 0, 0); be_draw(ARG(3)); RETURN_STD(4, S_OK); }
 API(d_DrawIndexedPrimitive) { dump_draw("DrawIndexedPrimitive", ARG(1), ARG(6)); if (hb_active()) hb_draw(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6), 0, 0, 0, 0, 1); else swr_draw(ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6), 0, 0, 0, 0); be_draw(ARG(6)); RETURN_STD(7, S_OK); }
-API(d_DrawPrimitiveUP) { (void)prim_vertices; dump_draw("DrawPrimitiveUP", ARG(1), ARG(2)); if (hb_active()) hb_draw(ARG(1), 0, 0, 0, 0, ARG(2), 0, 0, ARG(3), ARG(4), 0); else swr_draw(ARG(1), 0, 0, 0, 0, ARG(2), 0, 0, ARG(3), ARG(4)); be_draw(ARG(2)); set_ref(&D->stream[0], 0); RETURN_STD(5, S_OK); }
-API(d_DrawIndexedPrimitiveUP) { dump_draw("DrawIndexedPrimitiveUP", ARG(1), ARG(4)); if (hb_active()) hb_draw(ARG(1), 0, ARG(2), ARG(3), 0, ARG(4), ARG(5), ARG(6), ARG(7), ARG(8), 1); else swr_draw(ARG(1), 0, ARG(2), ARG(3), 0, ARG(4), ARG(5), ARG(6), ARG(7), ARG(8)); be_draw(ARG(4)); set_ref(&D->stream[0], 0); set_ref(&D->indices, 0); RETURN_STD(9, S_OK); }
+API(d_DrawPrimitiveUP) { (void)prim_vertices; dump_draw("DrawPrimitiveUP", ARG(1), ARG(2)); if (hb_active()) hb_draw(ARG(1), 0, 0, 0, 0, ARG(2), 0, 0, ARG(3), ARG(4), 0); else swr_draw(ARG(1), 0, 0, 0, 0, ARG(2), 0, 0, ARG(3), ARG(4)); be_draw(ARG(2)); set_ref(&D->stream[0], 0); D->dirty |= D_BUF; RETURN_STD(5, S_OK); }
+API(d_DrawIndexedPrimitiveUP) { dump_draw("DrawIndexedPrimitiveUP", ARG(1), ARG(4)); if (hb_active()) hb_draw(ARG(1), 0, ARG(2), ARG(3), 0, ARG(4), ARG(5), ARG(6), ARG(7), ARG(8), 1); else swr_draw(ARG(1), 0, ARG(2), ARG(3), 0, ARG(4), ARG(5), ARG(6), ARG(7), ARG(8)); be_draw(ARG(4)); set_ref(&D->stream[0], 0); set_ref(&D->indices, 0); D->dirty |= D_BUF; RETURN_STD(9, S_OK); }
 API(d_CreateVertexDeclaration) {
   u32 p = ARG(1), n = 0;
   while (M8(p + 8 * n) != 0xff && n < 64) n++;
@@ -674,9 +683,9 @@ API(d_CreateVertexDeclaration) {
   M32(ARG(2)) = g;
   RETURN_STD(3, S_OK);
 }
-API(d_SetVertexDeclaration) { set_ref(&D->decl, ARG(1)); RETURN_STD(2, S_OK); }
+API(d_SetVertexDeclaration) { set_ref(&D->decl, ARG(1)); D->dirty |= D_SH; RETURN_STD(2, S_OK); }
 API(d_GetVertexDeclaration) { get_ref(ARG(1), D->decl); RETURN_STD(2, S_OK); }
-API(d_SetFVF) { D->fvf = ARG(1); RETURN_STD(2, S_OK); }
+API(d_SetFVF) { D->fvf = ARG(1); D->dirty |= D_SH; RETURN_STD(2, S_OK); }
 API(d_GetFVF) { M32(ARG(1)) = D->fvf; RETURN_STD(2, S_OK); }
 static u32 make_shader(int kind, u32 fn) {
   u32 n = 1;
@@ -693,10 +702,10 @@ static u32 make_shader(int kind, u32 fn) {
   return g;
 }
 API(d_CreateVertexShader) { M32(ARG(2)) = make_shader(K_VS, ARG(1)); RETURN_STD(3, S_OK); }
-API(d_SetVertexShader) { set_ref(&D->vs, ARG(1)); RETURN_STD(2, S_OK); }
+API(d_SetVertexShader) { set_ref(&D->vs, ARG(1)); D->dirty |= D_SH; RETURN_STD(2, S_OK); }
 API(d_GetVertexShader) { get_ref(ARG(1), D->vs); RETURN_STD(2, S_OK); }
 API(d_CreatePixelShader) { M32(ARG(2)) = make_shader(K_PS, ARG(1)); RETURN_STD(3, S_OK); }
-API(d_SetPixelShader) { set_ref(&D->ps, ARG(1)); RETURN_STD(2, S_OK); }
+API(d_SetPixelShader) { set_ref(&D->ps, ARG(1)); D->dirty |= D_SH; RETURN_STD(2, S_OK); }
 API(d_GetPixelShader) { get_ref(ARG(1), D->ps); RETURN_STD(2, S_OK); }
 /* setting constants records what changed for the GPU backend: the float registers as a range */
 static inline void dirty_f(u32 *lo, u32 *hi, u32 r, u32 n, u32 flag) {
@@ -721,7 +730,7 @@ CONSTS(VertexShaderConstantB, vsb, 16, 4)
 CONSTS(PixelShaderConstantB, psb, 16, 4)
 API(d_SetStreamSource) {
   u32 i = ARG(1);
-  if (i < 16) { set_ref(&D->stream[i], ARG(2)); D->stream_off[i] = ARG(3); D->stream_stride[i] = ARG(4); }
+  if (i < 16) { set_ref(&D->stream[i], ARG(2)); D->stream_off[i] = ARG(3); D->stream_stride[i] = ARG(4); D->dirty |= D_BUF; }
   RETURN_STD(5, S_OK);
 }
 API(d_GetStreamSource) {
@@ -730,9 +739,9 @@ API(d_GetStreamSource) {
   M32(ARG(3)) = i < 16 ? D->stream_off[i] : 0; M32(ARG(4)) = i < 16 ? D->stream_stride[i] : 0;
   RETURN_STD(5, S_OK);
 }
-API(d_SetStreamSourceFreq) { u32 i = ARG(1); if (i < 16) D->stream_freq[i] = ARG(2); RETURN_STD(3, S_OK); }
+API(d_SetStreamSourceFreq) { u32 i = ARG(1); if (i < 16) { D->stream_freq[i] = ARG(2); D->dirty |= D_BUF; } RETURN_STD(3, S_OK); }
 API(d_GetStreamSourceFreq) { u32 i = ARG(1); M32(ARG(2)) = i < 16 ? D->stream_freq[i] : 1; RETURN_STD(3, S_OK); }
-API(d_SetIndices) { set_ref(&D->indices, ARG(1)); RETURN_STD(2, S_OK); }
+API(d_SetIndices) { set_ref(&D->indices, ARG(1)); D->dirty |= D_BUF; RETURN_STD(2, S_OK); }
 API(d_GetIndices) { get_ref(ARG(1), D->indices); RETURN_STD(2, S_OK); }
 API(d_CreateQuery) {
   u32 t = ARG(1);
@@ -1101,7 +1110,10 @@ API(x_CreateVolumeTextureFromFileInMemory) {
   M32(ARG(3)) = g;
   RETURN_STD(4, g ? S_OK : 0x88760B59u);
 }
-API(x_LoadSurfaceFromSurface) { copy_surface(ARG(3), ARG(0)); RETURN_STD(8, S_OK); }
+API(x_LoadSurfaceFromSurface) {
+  Obj *d = obj(ARG(0)); invalidate_cache(d); if (d && d->parent) invalidate_cache(obj(d->parent));
+  copy_surface(ARG(3), ARG(0)); RETURN_STD(8, S_OK);
+}
 API(x_SaveTextureToFileA) { RETURN_STD(4, S_OK); }
 
 static const ApiEntry xlist[] = {
