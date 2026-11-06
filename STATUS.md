@@ -150,6 +150,26 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v27, 4 GB of game memory, DualSense light bar and adaptive triggers:**
+  - **Memory.** The exe is large-address-aware (on 64-bit Windows it gets 4 GB), but the port gave it 2 GB. Its
+    address space now goes up to 0xEFFF0000, under the host-function thunks at 0xF0000000 (about 3.75 GB);
+    GetSystemInfo and GlobalMemoryStatus say so. Allocations still go bottom-up, as on Windows. FNV_VM_HIGH=1 starts
+    them at 2 GB to test high addresses: the Primm save loaded, played and saved, and two minutes of walking around
+    Goodsprings ran clean, with every game, runtime and D3D object above 2 GB.
+  - **The script-runner crash after loading Primm (pre-v21, about 1 load in 5)** did not happen in 15 loads (three of
+    them with FNV_VM_HIGH); v21's thread wake-up rework most likely removed the race. Kept an eye on.
+  - **DualSense** (rt/dualsense.c), on the main thread at Present, ~20 times a second, through the game's own
+    functions: the player (0x11DEA3C), health (ActorValueOwner at +0xA4, virtual +0x08 and +0x1C, actor value 16),
+    the equipped weapon and whether it is out (process at +0x68, virtual +0x148 and +0x454; weapon type at
+    TESObjectWEAP +0xF4), menu mode (0x702360) and the player's cell (+0x40; none at the main menu).
+    - Light bar: health, green through amber to a pulsing red below a third; New Vegas amber outside the world.
+    - Adaptive triggers (scePadSetTriggerEffect, the layout the gta4-ps5 port uses, looked up at run time): with a
+      gun out, R2 in weapon mode (gives way partway), firmer for rifles and launchers, even push for automatics and
+      heavy weapons; a kick on each shot (the game's firing rumble while R2 is held); L2 a light push. Off for
+      melee, unarmed, thrown, menus and the Pip-Boy. Checked: health 205/205 read on the Primm save, rifle (5) and
+      pistol (3) recognised, out/away and the Pip-Boy seen, a shot with the Goodsprings pistol kicked the trigger.
+    - Settings > Controls: Adaptive Triggers and Light Bar Health, on/off at once ([fnv_recomp] iAdaptiveTriggers,
+      iLightBar).
 - **v26, performance overlay and frame-rate cap, both in Settings > Display and applied at once:**
   - The overlay (rt/osd.c, drawn by hostd3d9.cpp over the finished frame) replaces DXVK's HUD, which could not be
     switched while running. Off, Basic (fps and frame time) or Detailed, in the style of MSI Afterburner: fps with

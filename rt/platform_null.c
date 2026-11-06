@@ -13,3 +13,6 @@ void plat_mouse(int32_t *dx, int32_t *dy, int32_t *dz, uint8_t b[8]) { *dx = *dy
 void *plat_window(void) { return 0; }
 int plat_gpu_window(void) { return 0; }
 int plat_audio_open(PlatAudioFill fill) { (void)fill; return 0; }
+void plat_pad_light(uint8_t r, uint8_t g, uint8_t b) { (void)r; (void)g; (void)b; }
+void plat_pad_light_reset(void) {}
+void plat_pad_triggers(const uint8_t param[120]) { (void)param; }

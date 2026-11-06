@@ -14,7 +14,9 @@
  * Resolution: the game renders at iSize W x iSize H ([Display] in FalloutPrefs.ini), read once at start-up; on the
  * PC the launcher sets them. The callback sets the iSize settings (0x11C73DC, 0x11C718C; the value at +4), which the
  * game saves itself, and raises the start menu's restart-required flag (0x75F6F0), as Texture Size does.
- * Frame Rate Cap and Performance Overlay (osd.c) apply at once and are kept in [fnv_recomp]. */
+ * Frame Rate Cap and Performance Overlay (osd.c) apply at once and are kept in [fnv_recomp].
+ *
+ * Settings > Controls, after Vibration: Adaptive Triggers and Light Bar (dualsense.c), also at once. */
 #include "rt.h"
 #include "d3d9_internal.h"
 
@@ -26,9 +28,11 @@
 #define SET_ISIZE_W     0x11C73DCu
 #define SET_ISIZE_H     0x11C718Cu
 #define TEXTURE_SIZE_CB 0x7D1B40u
+#define VIBRATION_CB    0x7D30E0u
 
 void rt_prefs_set(const char *sect, const char *key, const char *val); /* firstrun.c */
 extern int g_osd_mode, g_frame_cap;                                    /* osd.c */
+extern int g_ds_triggers, g_ds_lightbar;                               /* dualsense.c */
 
 /* ---- the options ------------------------------------------------------------------------------------ */
 static const u32 g_w[] = {1280, 1920, 2560, 3840}, g_h[] = {720, 1080, 1440, 2160};
@@ -77,23 +81,40 @@ static int osd_set(int i) {
   return 0;
 }
 
+static int onoff_set(int *v, int i, const char *key, const char *what) {
+  if ((i != 0) != *v) {
+    *v = i != 0;
+    rt_prefs_set("fnv_recomp", key, *v ? "1" : "0");
+    rt_log("options: %s %s", what, *v ? "on" : "off");
+  }
+  return 0;
+}
+static int trg_get(void) { return g_ds_triggers ? 1 : 0; }
+static int trg_set(int i) { return onoff_set(&g_ds_triggers, i, "iAdaptiveTriggers", "adaptive triggers"); }
+static int lb_get(void) { return g_ds_lightbar ? 1 : 0; }
+static int lb_set(int i) { return onoff_set(&g_ds_lightbar, i, "iLightBar", "light bar"); }
+
 typedef struct {
   const char *name;
   const char *values[4];
   int count, width;
   int (*get)(void);
   int (*set)(int); /* returns 1 if a restart is needed */
+  u32 modes;       /* the submenu: 0x10 Display, 0x40 Controls */
+  u32 after;       /* the game's option it follows (its callback), or 0 for the one before in this table */
   u32 cb;          /* guest address of its callback */
 } PortOption;
 
-static void cb_res(Ctx *c), cb_cap(Ctx *c), cb_osd(Ctx *c);
+static void cb_res(Ctx *c), cb_cap(Ctx *c), cb_osd(Ctx *c), cb_trg(Ctx *c), cb_lb(Ctx *c);
 static PortOption g_opts[] = {
-  {"Resolution", {"1280 x 720", "1920 x 1080", "2560 x 1440", "3840 x 2160"}, 4, 85, res_get, res_set},
-  {"Frame Rate Cap", {"30 FPS", "60 FPS"}, 2, 55, cap_get, cap_set},
-  {"Performance Overlay", {"OFF", "BASIC", "DETAILED"}, 3, 85, osd_get, osd_set},
+  {"Resolution", {"1280 x 720", "1920 x 1080", "2560 x 1440", "3840 x 2160"}, 4, 85, res_get, res_set, 0x10, TEXTURE_SIZE_CB},
+  {"Frame Rate Cap", {"30 FPS", "60 FPS"}, 2, 55, cap_get, cap_set, 0x10, 0},
+  {"Performance Overlay", {"OFF", "BASIC", "DETAILED"}, 3, 85, osd_get, osd_set, 0x10, 0},
+  {"Adaptive Triggers", {"OFF", "ON"}, 2, 0, trg_get, trg_set, 0x40, VIBRATION_CB},
+  {"Light Bar Health", {"OFF", "ON"}, 2, 0, lb_get, lb_set, 0x40, 0},
 };
 #define NOPT (int)(sizeof g_opts / sizeof *g_opts)
-static const HostFn g_cbs[NOPT] = {cb_res, cb_cap, cb_osd};
+static const HostFn g_cbs[NOPT] = {cb_res, cb_cap, cb_osd, cb_trg, cb_lb};
 
 static void changed(Ctx *c, PortOption *o) {
   u32 opt = ARG(0), sm = M32(START_MENU);
@@ -114,6 +135,8 @@ static void changed(Ctx *c, PortOption *o) {
 static void cb_res(Ctx *c) { changed(c, &g_opts[0]); }
 static void cb_cap(Ctx *c) { changed(c, &g_opts[1]); }
 static void cb_osd(Ctx *c) { changed(c, &g_opts[2]); }
+static void cb_trg(Ctx *c) { changed(c, &g_opts[3]); }
+static void cb_lb(Ctx *c) { changed(c, &g_opts[4]); }
 
 /* ---- adding them to the menu ------------------------------------------------------------------------- */
 static int index_of_cb(u32 cb) {
@@ -128,7 +151,7 @@ static void add(Ctx *c, PortOption *o, u32 after_cb) {
   u32 size = 0x30;
   u32 obj = rt_call_guest(c, 0x401000u, 1, &size); /* operator new: the game frees it with its own delete */
   if (!obj) return;
-  u32 args[7 + 4] = {obj, guest_strdup(o->name), o->cb, 0x10 /* Display */, 0 /* named values */, (u32)o->count, (u32)o->width};
+  u32 args[7 + 4] = {obj, guest_strdup(o->name), o->cb, o->modes, 0 /* named values */, (u32)o->count, (u32)o->width};
   for (int i = 0; i < o->count; i++) args[7 + i] = guest_strdup(o->values[i]);
   rt_call_guest(c, 0x7D6350u, 7 + o->count, args);
 
@@ -156,14 +179,17 @@ void port_options_install(Ctx *c) {
   }
   u32 eax = c->r[0], ecx = c->r[1], edx = c->r[2];
   int added = index_of_cb(g_opts[0].cb ? g_opts[0].cb : 1) < 0;
-  u32 after = TEXTURE_SIZE_CB;
+  u32 after = 0;
   for (int i = 0; i < NOPT; i++) {
     if (!g_opts[i].cb) g_opts[i].cb = rt_thunk(g_cbs[i], g_opts[i].name);
+    if (g_opts[i].after) after = g_opts[i].after;
     add(c, &g_opts[i], after);
     after = g_opts[i].cb;
   }
   c->r[0] = eax; c->r[1] = ecx; c->r[2] = edx;
   if (added)
-    rt_log("options: Settings > Display: Resolution (now %ux%u), Frame Rate Cap (%d), Performance Overlay (%s) added",
-           M32(SET_ISIZE_W + 4), M32(SET_ISIZE_H + 4), g_frame_cap, g_osd_mode == 0 ? "off" : g_osd_mode == 1 ? "basic" : "detailed");
+    rt_log("options: Settings > Display: Resolution (now %ux%u), Frame Rate Cap (%d), Performance Overlay (%s); "
+           "Settings > Controls: Adaptive Triggers (%s), Light Bar Health (%s) added",
+           M32(SET_ISIZE_W + 4), M32(SET_ISIZE_H + 4), g_frame_cap, g_osd_mode == 0 ? "off" : g_osd_mode == 1 ? "basic" : "detailed",
+           g_ds_triggers ? "on" : "off", g_ds_lightbar ? "on" : "off");
 }

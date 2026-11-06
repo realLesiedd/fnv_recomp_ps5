@@ -4,10 +4,14 @@
 #include <sys/mman.h>
 #include <string.h>
 
+/* The game is large-address-aware (its exe says so; on 64-bit Windows it gets 4 GB), so its address space goes up
+   to just under THUNK_BASE (0xF0000000, where host functions have their fake addresses): about 3.75 GB. Like
+   Windows, allocations go from the bottom up, so addresses above 2 GB are only handed out once the lower 2 GB are
+   used; FNV_VM_HIGH=1 starts them at 2 GB, to test that the game and the port cope with them. */
 #define GRAN 0x10000u
 #define VM_LO 0x00010000u
-#define VM_HI 0x7FFF0000u
-#define NGRAN (0x80000000u / GRAN)
+#define VM_HI 0xEFFF0000u
+#define NGRAN (0x100000000ull / GRAN)
 
 static pthread_mutex_t g_vm_lock = PTHREAD_MUTEX_INITIALIZER;
 static u32 g_owner[NGRAN];  /* 0 = free, else base address of the reservation (+1 to keep 0 free) */
@@ -30,7 +34,7 @@ u8 *g_guest_mem;
 #include <ps5platform/shm.h>
 /* one direct-memory object per reservation, mapped at its place in the window (as the
    gta4-ps5 port maps its guest views); never charged to the flexible budget */
-static struct ps5_shm g_shm[0x80000000u / 0x10000u];
+static struct ps5_shm g_shm[0x100000000ull / 0x10000u];
 static void commit(u32 a, u32 n) {
   struct ps5_shm *sh = &g_shm[a / 0x10000u];
   void *view = NULL;
@@ -78,7 +82,10 @@ void mem_init(void) {
   /* the image range is reserved */
   for (u32 a = IMAGE_BASE; a < IMAGE_BASE + g_image_size; a += GRAN) g_owner[a / GRAN] = IMAGE_BASE + 1;
   g_rsize[IMAGE_BASE / GRAN] = (g_image_size + GRAN - 1) & ~(GRAN - 1);
+  if (getenv("FNV_VM_HIGH")) { g_vm_hint = 0x80000000u; rt_log("memory: allocations start at 2 GB (FNV_VM_HIGH)"); }
 }
+
+u32 vm_top(void) { return VM_HI; }
 
 static int range_free(u32 a, u32 n) {
   for (u32 g = a / GRAN; g < (a + n) / GRAN; g++)
@@ -137,7 +144,8 @@ int vm_free(u32 addr, u32 size, u32 type) {
       fresh(base, n, PROT_NONE);
       g_guest_backed -= n;
       for (u32 k = base / GRAN; k < (base + n) / GRAN; k++) g_owner[k] = 0;
-      if (base < g_vm_hint) g_vm_hint = base < 0x02000000u ? 0x02000000u : base;
+      u32 floor = getenv("FNV_VM_HIGH") ? 0x80000000u : 0x02000000u;
+      if (base < g_vm_hint) g_vm_hint = base < floor ? floor : base;
       ok = 1;
     } else { /* MEM_DECOMMIT */
       u32 a = addr & ~0xfffu;
@@ -153,7 +161,7 @@ int vm_free(u32 addr, u32 size, u32 type) {
 int vm_query(u32 addr, u32 *base, u32 *alloc_base, u32 *size, u32 *state) {
   pthread_mutex_lock(&g_vm_lock);
   u32 g = addr / GRAN;
-  if (g >= NGRAN) { pthread_mutex_unlock(&g_vm_lock); return 0; }
+  if (g >= VM_HI / GRAN) { pthread_mutex_unlock(&g_vm_lock); return 0; } /* above the game's address space */
   if (g_owner[g]) {
     u32 b = g_owner[g] - 1;
     *alloc_base = b;
@@ -162,7 +170,7 @@ int vm_query(u32 addr, u32 *base, u32 *alloc_base, u32 *size, u32 *state) {
     *state = 0x1000; /* MEM_COMMIT */
   } else {
     u32 e = g;
-    while (e < NGRAN && !g_owner[e]) e++;
+    while (e < VM_HI / GRAN && !g_owner[e]) e++;
     *alloc_base = 0;
     *base = g * GRAN;
     *size = (e - g) * GRAN;

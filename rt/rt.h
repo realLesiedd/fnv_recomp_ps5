@@ -37,6 +37,7 @@ u32 rt_call_guest(Ctx *c, u32 addr, int nargs, const u32 *args);
 /* memory */
 void mem_init(void);
 u32 vm_alloc(u32 addr, u32 size, u32 type, u32 prot);  /* VirtualAlloc */
+u32 vm_top(void);                                       /* end of the game's address space (mem.c) */
 int vm_free(u32 addr, u32 size, u32 type);
 int vm_query(u32 addr, u32 *base, u32 *alloc_base, u32 *size, u32 *state);
 u32 heap_alloc(u32 size, int zero);

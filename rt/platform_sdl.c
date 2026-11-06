@@ -188,6 +188,58 @@ int plat_pad(int index, PlatPad *o, uint32_t *packet) {
 void plat_rumble(int index, uint16_t low, uint16_t high) {
   if (index >= 0 && index < 4 && g_pad[index]) SDL_GameControllerRumble(g_pad[index], low, high, 250);
 }
+
+void plat_pad_light(uint8_t r, uint8_t g, uint8_t b) {
+  if (g_pad[0]) SDL_GameControllerSetLED(g_pad[0], r, g, b);
+}
+
+#ifdef __PROSPERO__
+/* scePad's trigger effects and light bar reset, which SDL's PS5 driver does not wrap: looked up at run time (a
+   system without them only loses the effect), on the controller SDL opened (scePadGetHandle for the user) */
+int sceKernelLoadStartModule(const char *, size_t, const void *, unsigned, void *, int *);
+int sceKernelDlsym(int, const char *, void **);
+static int (*p_get_handle)(int32_t user, int32_t type, int32_t index), (*p_set_trigger)(int32_t, const void *),
+    (*p_reset_light)(int32_t), (*p_initial_user)(int32_t *);
+static int pad_handle(void) {
+  static int done, failures;
+  if (!done) {
+    done = 1;
+    int pad = sceKernelLoadStartModule("libScePad.sprx", 0, 0, 0, 0, 0);
+    int us = sceKernelLoadStartModule("libSceUserService.sprx", 0, 0, 0, 0, 0);
+    void *f = 0;
+    if (pad >= 0 && !sceKernelDlsym(pad, "scePadGetHandle", &f)) p_get_handle = f;
+    f = 0;
+    if (pad >= 0 && !sceKernelDlsym(pad, "scePadSetTriggerEffect", &f)) p_set_trigger = f;
+    f = 0;
+    if (pad >= 0 && !sceKernelDlsym(pad, "scePadResetLightBar", &f)) p_reset_light = f;
+    f = 0;
+    if (us >= 0 && !sceKernelDlsym(us, "sceUserServiceGetInitialUser", &f)) p_initial_user = f;
+    rt_log("dualsense: trigger effects %s", p_get_handle && p_set_trigger && p_initial_user ? "available" : "not available");
+  }
+  if (!p_get_handle || !p_initial_user || failures > 20) return -1;
+  int32_t user = -1;
+  if (p_initial_user(&user) || user < 0) { failures++; return -1; }
+  int h = p_get_handle(user, 0, 0);
+  if (h < 0) failures++;
+  return h;
+}
+void plat_pad_light_reset(void) {
+  int h = pad_handle();
+  if (h >= 0 && p_reset_light) p_reset_light(h);
+}
+void plat_pad_triggers(const uint8_t param[120]) {
+  static int refused;
+  if (refused >= 3) return;
+  int h = pad_handle();
+  if (h < 0 || !p_set_trigger) return;
+  int r = p_set_trigger(h, param);
+  if (r && ++refused >= 3) rt_log("dualsense: adaptive triggers refused (0x%08x); off", (unsigned)r);
+  else if (!r) refused = 0;
+}
+#else
+void plat_pad_light_reset(void) {}
+void plat_pad_triggers(const uint8_t param[120]) { (void)param; } /* a PC's DualSense: not done */
+#endif
 void plat_keys(uint8_t keys[256]) {
   pthread_mutex_lock(&g_in_lock);
   for (int i = 0; i < 256; i++) keys[i] = g_keys[i] | g_keys_latch[i];

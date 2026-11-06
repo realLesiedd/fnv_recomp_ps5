@@ -301,19 +301,21 @@ API(k_WriteConsoleA) { fwrite(HP(ARG(1)), 1, ARG(2), stderr); if (ARG(3)) M32(AR
 API(k_WriteConsoleW) { RETURN_STD(5, 0); }
 API(k_GetSystemInfo) {
   u32 p = ARG(0); memset(HP(p), 0, 36);
-  M32(p + 4) = 0x1000; M32(p + 8) = 0x10000; M32(p + 12) = 0x7ffeffff; M32(p + 16) = 0xf; M32(p + 20) = 4;
+  M32(p + 4) = 0x1000; M32(p + 8) = 0x10000; M32(p + 12) = vm_top() - 1; M32(p + 16) = 0xf; M32(p + 20) = 4;
   M32(p + 24) = 586; M32(p + 28) = 0x10000; M16(p + 32) = 6;
   RETURN_STD(1, 0);
 }
 API(k_GlobalMemoryStatus) {
-  u32 p = ARG(0); M32(p) = 32; M32(p + 4) = 20; M32(p + 8) = 0x7fffffff; M32(p + 12) = 0x60000000;
-  M32(p + 16) = 0x7fffffff; M32(p + 20) = 0x7fffffff; M32(p + 24) = 0x7ffe0000; M32(p + 28) = 0x60000000;
+  /* address space: the game's (vm_top), less what it has taken */
+  u32 p = ARG(0), avail = vm_top() - (u32)(g_guest_backed < vm_top() ? g_guest_backed : vm_top());
+  M32(p) = 32; M32(p + 4) = 20; M32(p + 8) = 0x7fffffff; M32(p + 12) = 0x60000000;
+  M32(p + 16) = 0x7fffffff; M32(p + 20) = 0x7fffffff; M32(p + 24) = vm_top(); M32(p + 28) = avail;
   RETURN_STD(1, 0);
 }
 API(k_GlobalMemoryStatusEx) {
   u32 p = ARG(0); M32(p) = 64; M32(p + 4) = 20;
   M64(p + 8) = 8ull << 30; M64(p + 16) = 6ull << 30; M64(p + 24) = 16ull << 30; M64(p + 32) = 14ull << 30;
-  M64(p + 40) = 0x7ffe0000; M64(p + 48) = 0x60000000; M64(p + 56) = 0;
+  M64(p + 40) = vm_top(); M64(p + 48) = vm_top() - (g_guest_backed < vm_top() ? g_guest_backed : vm_top()); M64(p + 56) = 0;
   RETURN_STD(1, 1);
 }
 

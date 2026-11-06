@@ -170,6 +170,7 @@ static void be_present(void) {
   g_d3d_frames = g_frames + 1;
   if (hb_active()) hb_movie_overlay(); /* a playing Bink movie, over the frame */
   osd_frame(); /* the performance overlay, over everything */
+  { extern void ds_frame(void); ds_frame(); } /* DualSense light bar and triggers (dualsense.c) */
   be_present_shot();
   osd_frame_limit(); /* Settings > Display > Frame Rate Cap */
   struct timespec p0, p1;

@@ -15,6 +15,11 @@ int plat_quit_requested(void);
 typedef struct { uint16_t buttons; uint8_t lt, rt; int16_t lx, ly, rx, ry; } PlatPad;
 int plat_pad(int index, PlatPad *out, uint32_t *packet);
 void plat_rumble(int index, uint16_t low, uint16_t high);
+/* DualSense extras (dualsense.c) for the first controller: light bar colour, back to the system's colour, and the
+   adaptive triggers (ScePadTriggerEffectParam, 120 bytes; PS5 only) */
+void plat_pad_light(uint8_t r, uint8_t g, uint8_t b);
+void plat_pad_light_reset(void);
+void plat_pad_triggers(const uint8_t param[120]);
 
 /* DirectInput-style keyboard (DIK scancodes, 0x80 = down) and mouse deltas */
 void plat_keys(uint8_t keys[256]);

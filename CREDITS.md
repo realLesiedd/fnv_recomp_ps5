@@ -52,6 +52,8 @@ fnv_recomp stands on the work of these projects and people. Thank you.
   L1/R1/L2/R2/L3/R3 glyphs drawn by `tools/make_glyphs.py`, and DejaVu Sans Mono Bold is the performance overlay's
   font (`tools/make_osd_font.py`). The PlayStation-style button prompts (`assets/`) are original drawings made for
   this project, not Sony artwork.
+- **gta4-ps5** (rexglue): its PS5 input driver documents the console's trigger-effect layout (after ProsperoEden's
+  `ps5_pad.hpp`), which `rt/platform_sdl.c` follows for the DualSense's adaptive triggers. No code is copied.
 - **[Wine](https://www.winehq.org/)** (LGPL): its documentation of DirectSound and WINMM mmio behaviour was the
   reference for corner cases in `rt/dsound.c` and `rt/mmio.c` (no Wine code is used).
 
