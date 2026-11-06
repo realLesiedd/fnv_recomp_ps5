@@ -404,7 +404,7 @@ API(b_SetVolume) {
   if (b && b->traced && b->playing && !b->primary && v != b->volume)
     rt_log("audio: buf %d volume %d -> %d while playing", (int)(b - g_buf), b->volume, v);
   if (g_vol_log && b && !b->primary && v != b->volume)
-    rt_log("audio: buf %p 3d=%d %d -> %d", (void *)b, (b->flags & DSBCAPS_CTRL3D) != 0, b->volume, v);
+    rt_log("audio: buf %d 3d=%d %d -> %d", (int)(b - g_buf), (b->flags & DSBCAPS_CTRL3D) != 0, b->volume, v);
   if (b && b->primary && v != g_master) rt_log("audio: primary %d -> %d", g_master, v);
   if (b) { if (b->primary) g_master = v; else b->volume = v; }
   RETURN_STD(2, DS_OK);
