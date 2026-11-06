@@ -150,7 +150,7 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
-- **Next build (not built yet):** Trigger Strength spread out, since Light still felt strong: the scale on each
+- **v35:** Trigger Strength spread out, since Light still felt strong: the scale on each
   weapon's Max strength is 0.15 / 0.3 / 0.55 / 1.0 (was 0.4 / 0.65 / 0.85 / 1.0), so a pistol's resistance is
   1 / 2 / 4 / 7 out of 8 for Light / Medium / Strong / Max.
   The app now checks the player's FalloutNV.exe before running it (FNV-1a 64 of .text, and of .rdata+.data): the

@@ -46,7 +46,7 @@ files.
 
 | | Version |
 |---|---|
-| fnv_recomp | v34 (testing build) |
+| fnv_recomp | v35 (testing build) |
 | Fallout: New Vegas for PC | 1.4.0.525 |
 | PS5 system software | Tested on 13.42 |
 
