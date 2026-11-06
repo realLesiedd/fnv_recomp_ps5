@@ -95,6 +95,8 @@ static const struct { const char *key, *def; } g_own[] = {
   {"iAdaptiveTriggers", "1"},  /* DualSense adaptive triggers: 0 off, 1 on (dualsense.c; Settings > Controls) */
   {"iTriggerStrength", "2"},   /* adaptive trigger strength: 0 light, 1 medium, 2 strong, 3 max (dualsense.c) */
   {"iLightBar", "1"},          /* DualSense light bar shows health: 0 off, 1 on (dualsense.c; Settings > Controls) */
+  {"iFastMath", "1"},          /* native versions of the game's hottest maths routines: 0 runs the originals (fastmath.c) */
+  {"iProfiler", "1"},          /* main-thread profile in fnv.log once a minute: 0 off (prof.c) */
 };
 
 static void prefs_path(char *out, size_t n) {

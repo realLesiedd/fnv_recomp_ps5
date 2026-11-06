@@ -125,9 +125,9 @@ static void *prof_main(void *arg) {
       u64 pc = g_ring[rd & (RING - 1)];
       total++;
       if (pc >= g_gen_lo && pc < g_gen_hi) { n[GAME]++; count(game, guest_of(pc)); }
-      else if (pc >= app_lo && pc < g_gen_lo) { n[PORT]++; count(port, (pc - app_lo) & ~0xFFull); }
-      else if (pc >= g_gen_hi && pc < app_hi) { n[LIBS]++; count(libs, (pc - app_lo) & ~0xFFull); }
-      else { n[SYS]++; count(sys, pc & ~0xFFull); }
+      else if (pc >= app_lo && pc < g_gen_lo) { n[PORT]++; count(port, (pc - app_lo) & ~0x3Full); }
+      else if (pc >= g_gen_hi && pc < app_hi) { n[LIBS]++; count(libs, (pc - app_lo) & ~0x3Full); }
+      else { n[SYS]++; count(sys, pc & ~0x3Full); }
     }
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);

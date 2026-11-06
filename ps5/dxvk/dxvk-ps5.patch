@@ -220,10 +220,10 @@ index 1d88e2c..c57d86e 100644
  wsi_deps = [ dep_displayinfo ]
 diff --git a/src/wsi/ps5/wsi_platform_ps5.cpp b/src/wsi/ps5/wsi_platform_ps5.cpp
 new file mode 100644
-index 0000000..0d65941
+index 0000000..2f19457
 --- /dev/null
 +++ b/src/wsi/ps5/wsi_platform_ps5.cpp
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,163 @@
 +/* PS5 WSI for DXVK native (fnv_recomp).
 + *
 + * A jailbroken PS5 has one display (the TV) and no windowing system: the
@@ -338,12 +338,19 @@ index 0000000..0d65941
 +        display = displays[i].display;
 +        mode = modes[0].displayMode;
 +        params = modes[0].parameters;
++        /* every mode the driver offers, refresh in millihertz (59940 is 59.94 Hz, 119880 is 119.88 Hz) */
++        for (uint32_t m = 0; m < modeCount; m++)
++          Logger::info(str::format("PS5 WSI: mode ", m, ": ", modes[m].parameters.visibleRegion.width, "x",
++                                   modes[m].parameters.visibleRegion.height, " @ ", modes[m].parameters.refreshRate, " mHz"));
++        /* 3840x2160, preferring a refresh near 60 Hz: the driver lists a 119.88 Hz mode first when the title
++           declares high frame rate, and the game's frame cap is 30 or 60 */
++        bool found = false;
 +        for (uint32_t m = 0; m < modeCount; m++) {
-+          if (modes[m].parameters.visibleRegion.width == 3840 && modes[m].parameters.visibleRegion.height == 2160) {
-+            mode = modes[m].displayMode;
-+            params = modes[m].parameters;
-+            break;
-+          }
++          const VkDisplayModeParametersKHR &p = modes[m].parameters;
++          if (p.visibleRegion.width != 3840 || p.visibleRegion.height != 2160) continue;
++          bool near60 = p.refreshRate >= 59000 && p.refreshRate <= 61000;
++          if (!found || near60) { mode = modes[m].displayMode; params = p; found = true; }
++          if (near60) break;
 +        }
 +      }
 +      if (mode == VK_NULL_HANDLE) {
@@ -365,7 +372,7 @@ index 0000000..0d65941
 +      g_ps5Width = params.visibleRegion.width;
 +      g_ps5Height = params.visibleRegion.height;
 +      if (params.refreshRate) g_ps5RefreshMilliHz = params.refreshRate;
-+      Logger::info(str::format("PS5 WSI: TV mode ", g_ps5Width, "x", g_ps5Height, " @ ", g_ps5RefreshMilliHz / 1000, " Hz"));
++      Logger::info(str::format("PS5 WSI: TV mode ", g_ps5Width, "x", g_ps5Height, " @ ", g_ps5RefreshMilliHz, " mHz"));
 +      return createPlaneSurface(instance, &info, nullptr, pSurface);
 +    }
 +  };

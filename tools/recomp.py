@@ -1221,6 +1221,18 @@ HOOKS = {
     0x789820,  # LoadingMenu::Update: no menu (quitting) -> return instead of reading null+0x5BC
     0x78D080,  # UpdateLoadingMenuState from the loading-screen thread once the menu is gone -> skip
     0x7D0BF0,  # Exit Game: close the app right away (PS5: back to the home screen) instead of tearing down
+    # native versions of the hottest small maths routines (rt/fastmath.c); same results, no x87 emulation
+    0x416870,  # Vec3 constructor
+    0x439E90,  # Vec3 operator+
+    0x439EF0,  # Vec3 operator-
+    0x4A3760,  # float * Vec3
+    0x4B4500,  # Matrix3 * Vec3
+    0x43F8D0,  # Matrix3 * Matrix3
+    0x62C250,  # Transform * Transform
+    0x4B6190,  # dot product (plane normal . point)
+    0x4B6160,  # Plane::Distance
+    0x4B6100,  # bounding sphere against a plane (culling)
+    0x49DA80,  # Plane::WhichSide (culling)
 }
 
 

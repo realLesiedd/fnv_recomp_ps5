@@ -154,6 +154,26 @@ Superseded as a plan. Written before the PS5 build played, and left as it was. A
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v38, native maths for the hottest culling and transform routines:**
+  - The owner's v37 PS5 profile (10 min, clean exit): in play the main thread was ~70% game code, ~13% port
+    runtime (sync_state, the D3D9 front end, rt_call_ind ~2%), ~6% DXVK/driver, ~10% waiting; mostly 56-58.5 fps
+    with the main thread at 100%. A render thread would only take the ~6%. The hottest game functions were small
+    x87 routines compiled without optimisation: culling (sphere against plane 0x4B6100, plane side 0x49DA80, the
+    fade-node and frustum walkers that call them) and transform maths (Transform*Transform 0x62C250,
+    Matrix3*Matrix3 0x43F8D0, Matrix3*Vec3 0x4B4500, Vec3 +, -, scale, constructor, dot, plane distance).
+  - Those 11 are now native (rt/fastmath.c, listed in HOOKS): the same operations in the same order in double, rounded
+    to float where the original stores a float, the same eax/ecx/edx and stack effect, results through a temporary.
+    FNV_FASTMATH_CHECK=1 ran original and native side by side on the owner's Primm save: 30 million calls, no
+    difference in registers, x87 stack or memory. Same busy view, same build: those functions took 8.9% of the main
+    thread as recompiled code and 3.2% native (2.8x). [fnv_recomp] iFastMath=0 runs the originals.
+  - Lesson for the next step: recompiled x87 code is ~2.8x slower than native, and the rest of the profile is flat
+    (top function ~3%). Keeping x87 values in C locals inside the recompiler (instead of c->st) would speed up all
+    of the game's floating-point code at once. The frame cap spins while it waits, so "main thread CPU" barely moves
+    when a 60 fps scene gets cheaper; the profiler's groups and per-function samples are the measure.
+  - For #4 (120 Hz research): the PS5 WSI logs every display mode with its refresh in millihertz, and picks 3840x2160
+    near 60 Hz rather than the first 4K mode (a 119.88 Hz mode is listed first when 120 Hz is enabled).
+  - The profiler counts 64-byte spots, so its offsets name the exact function. iFastMath and iProfiler are written
+    into FalloutPrefs.ini with their defaults.
 - **v37:** v36 crashed at exactly 60 s on both of the owner's launches, in the profiler's own thread right after its
   first summary (SIGBUS in libc's strstr): on the console dladdr fails for most addresses, and the profiler then
   read the name out of an uninitialised Dl_info, which the first summary's snprintf had left non-null. The same
