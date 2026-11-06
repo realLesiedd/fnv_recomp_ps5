@@ -150,6 +150,9 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v24, smaller prompts:** the first drawings put the face symbols inside a ring about 42 px across, against the
+  game's own letters at about 23x34 in the same 64 px cells, so they looked far too big. Face buttons are now the
+  bare symbols (as on the PS3), and every glyph is drawn at 80% about the cell centre (SCALE in make_glyphs.py).
 - **v23, Pip-Boy arm says L2/R2:** the arm model's texture has LT and RT printed on the two tags beside the tab
   buttons (textures\pipboy3000\pipboyarm01.dds; the Xbox copy is the same). When it is uploaded (at 1024, or 512
   with a lower texture setting) it is recognised by fingerprint, the old letters are erased and filled from the tag

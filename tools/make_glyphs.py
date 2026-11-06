@@ -18,6 +18,8 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 SS = 4                      # supersampling
 FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 W = 6                       # stroke width at 64 px
+SCALE = 0.8                 # every glyph drawn at this size about the cell's centre: the game shows the cells large,
+                            # and at full size the symbols stood well above the text beside them
 
 
 def canvas(n=64):
@@ -38,20 +40,20 @@ def text(d, cx, cy, t, size):
 
 
 def face(symbol):
-    """a face button: the symbol inside a thin ring"""
+    """a face button: the bare symbol, as on the PS3, about as tall as the game's own letter glyphs (y 14..48)"""
     im = canvas(); d = ImageDraw.Draw(im)
-    ring(d, 32, 32, 21, 3.5)
+    cx, cy = 32, 31.5
     if symbol == 'cross':
-        k = 9.5
-        d.line([s(32 - k), s(32 - k), s(32 + k), s(32 + k)], fill=255, width=s(5))
-        d.line([s(32 - k), s(32 + k), s(32 + k), s(32 - k)], fill=255, width=s(5))
+        k = 11
+        d.line([s(cx - k), s(cy - k), s(cx + k), s(cy + k)], fill=255, width=s(5))
+        d.line([s(cx - k), s(cy + k), s(cx + k), s(cy - k)], fill=255, width=s(5))
     elif symbol == 'circle':
-        ring(d, 32, 32, 10, 4.5)
+        ring(d, cx, cy, 13, 4.5)
     elif symbol == 'square':
-        k = 9
-        d.rectangle([s(32 - k), s(32 - k), s(32 + k), s(32 + k)], outline=255, width=s(4.5))
+        k = 11.5
+        d.rectangle([s(cx - k), s(cy - k), s(cx + k), s(cy + k)], outline=255, width=s(4))
     elif symbol == 'triangle':
-        d.polygon([(s(32), s(18)), (s(44.5), s(40)), (s(19.5), s(40))], outline=255, width=s(4.5))
+        d.polygon([(s(cx), s(cy - 16)), (s(cx + 15), s(cy + 10)), (s(cx - 15), s(cy + 10))], outline=255, width=s(4.5))
     return im
 
 
@@ -74,8 +76,8 @@ def trigger(label):
 def stick(label):
     """L3/R3: a stick (ring) with its name"""
     im = canvas(); d = ImageDraw.Draw(im)
-    ring(d, 32, 32, 19, 3.5)
-    text(d, 32, 33, label, 13)
+    ring(d, 32, 31.5, 15, 3.5)
+    text(d, 32, 32.5, label, 11.5)
     return im
 
 
@@ -114,7 +116,11 @@ GLYPHS = {
 
 def finish(alpha, size, glow):
     """downsample the supersampled alpha; white glyph, optionally over a soft glow (the selected look)"""
-    a = alpha.resize((size, size), Image.BOX)
+    n = alpha.size[0]
+    m = int(round(n * SCALE))
+    small = Image.new('L', (n, n), 0)
+    small.paste(alpha.resize((m, m), Image.BOX), ((n - m) // 2, (n - m) // 2))
+    a = small.resize((size, size), Image.BOX)
     # hard edges for the plain glyphs (they show at about 20 pixels and must compress small); the glow keeps soft ones
     a = a.point(lambda v: 255 if v >= 110 else 0) if not glow else a.point(lambda v: 0 if v < 40 else 255 if v > 215 else v)
     out = Image.new('RGBA', (size, size), (255, 255, 255, 0))
