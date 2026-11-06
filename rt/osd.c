@@ -115,6 +115,7 @@ struct ps5_thread {
 };
 _Static_assert(sizeof(struct ps5_thread) == 40, "sceKernelGetCpuUsage entry is 40 bytes");
 #define PS5_THREADS 3072
+static int ps5_core_ready; /* 0: the next Detailed sample only records a baseline */
 
 static int ps5_idle_lane(uint32_t tid) {
   char name[0x40];
@@ -133,7 +134,13 @@ static int ps5_core_times(unsigned long long busy[MAXCORES], unsigned long long 
   static struct ps5_thread *list;
   static uint32_t idle_tid[MAXCORES];
   static unsigned long long last_idle[MAXCORES], last_wall, acc_t, acc_b[MAXCORES];
-  static int ready, no_idle, logged_ok, logged_fail;
+  static int no_idle, logged_ok, logged_fail;
+  /* CORES is drawn only for Detailed. sample() runs this on the main thread every 0.5 s, before the
+     overlay bails out, so anything else must not walk the thread list or look up names. */
+  if (g_osd_mode != 2) {
+    ps5_core_ready = 0;
+    return 0;
+  }
   if (no_idle) return 0;
   if (!list) {
     size_t bytes = (sizeof(struct ps5_thread) * PS5_THREADS + 16383u) & ~(size_t)16383u;
@@ -200,8 +207,8 @@ static int ps5_core_times(unsigned long long busy[MAXCORES], unsigned long long 
     return 0;
   }
   unsigned long long wall = (unsigned long long)ts.tv_sec * 1000000ull + (unsigned long long)(ts.tv_nsec / 1000ull);
-  if (!ready) {
-    ready = 1;
+  if (!ps5_core_ready) {
+    ps5_core_ready = 1;
     last_wall = wall;
     acc_t = 1;
     for (int i = 0; i < MAXCORES; i++) { last_idle[i] = idle_us[i]; acc_b[i] = 0; total[i] = 1; busy[i] = 0; }
@@ -226,6 +233,16 @@ static int core_loads(int pct[MAXCORES]) {
   static unsigned long long prev_busy[MAXCORES], prev_total[MAXCORES];
   unsigned long long busy[MAXCORES], total[MAXCORES];
   int n = 0;
+  /* Same gate for both platforms: the row is Detailed-only. Drop the previous sample so the first
+     Detailed sample after a switch only seeds the baseline. */
+  if (g_osd_mode != 2) {
+    memset(prev_busy, 0, sizeof prev_busy);
+    memset(prev_total, 0, sizeof prev_total);
+#ifdef __PROSPERO__
+    ps5_core_ready = 0;
+#endif
+    return 0;
+  }
 #ifdef __PROSPERO__
   n = ps5_core_times(busy, total);
   if (!n) return 0;
@@ -275,7 +292,7 @@ static void sample(double t, double span) {
   if (span > 0 && last_proc >= 0 && proc >= 0) S.total_pct = (int)(100 * (proc - last_proc) / span + 0.5);
   last_thr = thr; last_proc = proc;
   if (!S.cores) { long n = sysconf(_SC_NPROCESSORS_ONLN); S.cores = n > 0 ? (int)n : 8; }
-  S.ncores_seen = core_loads(S.core);
+  S.ncores_seen = core_loads(S.core); /* 0 unless Detailed; the per-core read is skipped otherwise */
   S.gpu = hb_gpu_load(&S.compiling);
   if (!hb_vram_mb(&S.vram_used, &S.vram_total)) S.vram_total = 0;
   S.ram_game = (unsigned)(g_guest_backed >> 20);
