@@ -11,8 +11,13 @@ buttons, L1/R1, L2/R2, L3/R3 for the shoulders, triggers and sticks, and the Dua
 Start and Back. Nothing of the game's art is stored here: only the letter boxes (where the letters sit in each cell)
 and our own drawings.
 
-Each cell file (internal/ps3_cells/<name>.cell): u8 1 if the cell is a highlighted (glowing) one, then the body
-coverage (64x64 bytes) and, for highlighted cells, the glow coverage (64x64 bytes).
+The face buttons keep the game's arc and get the PlayStation symbol in place of the letter. The shoulders, triggers,
+sticks and Start/Back are drawn whole, the way PS3-style icon sets for these games draw them (as the PS3 version
+did): thin outlines at the game's line weight - a flat rectangle for L1/R1, a taller rounded box for L2/R2, a stick
+with its letter in the cap for L3/R3, the button's name in a rectangle for Options and Create.
+
+Each cell file (internal/ps3_cells/<name>.cell): u8 flags (1: a highlighted, glowing cell; 2: replace the whole cell,
+not just its letters), then the body coverage (64x64 bytes) and, for highlighted cells, the glow coverage.
 
 The Pip-Boy arm's printed trigger tags (LT/RT on the arm model's texture) are relabelled L2/R2: arm_label writes the
 lettering as 8-bit coverage masks (a byte each for width and height, then the rows) that rt/glyphs.c paints over the
@@ -87,6 +92,51 @@ def draw(kind, box):
     return im.resize((64, 64), Image.BOX)
 
 
+LW = 2.7  # outline width: the game's own icons' lines
+
+
+def text_in(d, txt, cx, cy, cap, maxw):
+    """bold lettering of cap height `cap`, squeezed to at most maxw, centred on cx, cy"""
+    f = ImageFont.truetype(FONT, 400)
+    t = Image.new('L', (2600, 700), 0)
+    ImageDraw.Draw(t).text((40, 40), txt, font=f, fill=255, stroke_width=10, stroke_fill=255)
+    t = t.crop(t.getbbox())
+    th = S(cap)
+    tw = min(S(maxw), t.size[0] * th / t.size[1])
+    t = t.resize((int(tw), int(th)), Image.LANCZOS)
+    return t, (int(S(cx) - t.size[0] / 2), int(S(cy) - t.size[1] / 2))
+
+
+def outline(shapes, inset):
+    """the outline of the union of rounded rectangles [(x0, y0, x1, y1, radius)]: filled, then filled again smaller"""
+    im = Image.new('L', (64 * SS, 64 * SS), 0)
+    d = ImageDraw.Draw(im)
+    for x0, y0, x1, y1, r in shapes:
+        d.rounded_rectangle([S(x0), S(y0), S(x1), S(y1)], radius=S(r), fill=255)
+    for x0, y0, x1, y1, r in shapes:
+        d.rounded_rectangle([S(x0 + inset), S(y0 + inset), S(x1 - inset), S(y1 - inset)], radius=S(max(0.5, r - inset)), fill=0)
+    return im
+
+
+def draw_whole(kind):
+    """a whole icon, centred in the cell"""
+    cy = 31.5
+    if kind in ('L1', 'R1'):  # a flat rectangle
+        im = outline([(15, 20.5, 49, 42.5, 3.5)], LW)
+        t, at = text_in(None, kind, 32, cy, 11, 24)
+    elif kind in ('L2', 'R2'):  # a taller rounded box
+        im = outline([(19, 15, 45, 48, 7)], LW)
+        t, at = text_in(None, kind, 32, cy + 0.5, 10, 18)
+    elif kind in ('L3', 'R3'):  # a stick: a wide cap on a stem, its letter in the cap
+        im = outline([(12, 17, 52, 35, 8), (25, 31, 39, 46, 2)], LW)
+        t, at = text_in(None, kind[0], 32, 26, 10, 12)
+    else:  # Options, Create: the name in a rectangle
+        im = outline([(7, 21.5, 57, 41.5, 3)], LW)
+        t, at = text_in(None, 'OPTIONS' if kind == 'options' else 'CREATE', 32, cy, 8, 36 if kind == 'options' else 33)
+    im.paste(255, at, t)
+    return im.resize((64, 64), Image.BOX)
+
+
 def glow_of(body):
     """the highlighted cells' halo, like the game's own: soft, about 0.6 at its brightest"""
     g = body.filter(ImageFilter.GaussianBlur(2.4))
@@ -109,8 +159,10 @@ def main():
     os.makedirs(out, exist_ok=True)
     for name, box in BOXES.items():
         glow = name.startswith('glow_')
-        body = draw(KIND[name.split('_')[-1]], box)
-        data = bytes([1 if glow else 0]) + body.tobytes() + (glow_of(body).tobytes() if glow else b'')
+        kind = KIND[name.split('_')[-1]]
+        whole = kind not in ('cross', 'circle', 'square', 'triangle')
+        body = draw_whole(kind) if whole else draw(kind, box)
+        data = bytes([(1 if glow else 0) | (2 if whole else 0)]) + body.tobytes() + (glow_of(body).tobytes() if glow else b'')
         with open(os.path.join(out, name + '.cell'), 'wb') as f:
             f.write(data)
     print('wrote', len(BOXES), 'cells to', out)

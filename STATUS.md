@@ -150,6 +150,11 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v31, prompts in the PS3 icon-set style:** after a PS3-style icon mod for Fallout 3 on PC (the user's screenshot):
+  the face buttons keep the game's arc with the PlayStation symbol (as v30); the shoulders, triggers, sticks and
+  Start/Back are drawn whole in thin outlines at the game's line weight: L1/R1 a flat rectangle, L2/R2 a taller
+  rounded box, L3/R3 a stick with its letter in the cap, OPTIONS and CREATE in rectangles. Cell flag 2 marks a
+  whole-cell redraw. Checked on Settings > Controls > Action Mapping.
 - **v30, PS3-style prompts, per-core CPU, console test hook:**
   - **Prompts as the PS3 drew them.** Frames of PS3 gameplay (YouTube thumbnails) show the PS3 version's prompts in
     the same art as the Xbox ones the PC files carry, with the PlayStation symbols: "✕)" where the Xbox has "A)" (the

@@ -5,7 +5,9 @@
  * The PS3 version drew its prompts in the same art as the Xbox ones in the PC files, with the PlayStation symbols:
  * "✕)" where the Xbox has "A)" (the arc is the side of a raised button). So when the game uploads that atlas (recognised
  * by its first bytes and an FNV-1a 64 fingerprint of the player's own copy), each of the 22 button cells keeps the
- * game's own art and loses only its letters: the cell is split into its solid pieces, the one with the largest extent
+ * game's own art and loses only its letters (the face buttons; the shoulders, triggers, sticks and Start/Back are
+ * redrawn whole, in the thin-outline PS3 style, as tools/make_glyphs.py describes): the cell is split into its solid
+ * pieces, the one with the largest extent
  * (the arc, the bumper or trigger outline, the stick, the circle) is kept along with any small piece above or below
  * the middle band (a broken-off tip), the rest - the letters - are erased with every pixel of glow nearer to them
  * than to the kept shape, and the symbol drawn by tools/make_glyphs.py (✕ ○ □ △, L1/R1, L2/R2, L3/R3, the DualSense's
@@ -365,7 +367,8 @@ static int erase_letters(Px img[64][64], int box[4]) {
 }
 
 static int patch_cell(Obj *o, u32 cx, u32 cy, const EmbeddedAsset *a) {
-  if (!a || a->size < 1 + 4096 || (a->data[0] && a->size < 1 + 2 * 4096)) return 0;
+  if (!a || a->size < 1 + 4096 || ((a->data[0] & 1) && a->size < 1 + 2 * 4096)) return 0;
+  int glowing = a->data[0] & 1, whole = a->data[0] & 2; /* whole: the cell is redrawn, not just its letters */
   static Px img[64][64];
   for (int by = 0; by < 16; by++)
     for (int bx = 0; bx < 16; bx++) {
@@ -374,8 +377,9 @@ static int patch_cell(Obj *o, u32 cx, u32 cy, const EmbeddedAsset *a) {
       for (int i = 0; i < 16; i++) img[by * 4 + i / 4][bx * 4 + i % 4] = b[i];
     }
   int box[4];
-  if (!erase_letters(img, box)) return 0;
-  const u8 *body = a->data + 1, *glow = a->data[0] ? a->data + 1 + 4096 : NULL;
+  if (whole) memset(img, 0, sizeof img);
+  else if (!erase_letters(img, box)) return 0;
+  const u8 *body = a->data + 1, *glow = glowing ? a->data + 1 + 4096 : NULL;
   for (int y = 0; y < 64; y++)
     for (int x = 0; x < 64; x++) {
       Px *p = &img[y][x];
