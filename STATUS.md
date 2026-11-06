@@ -150,6 +150,13 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v29, new button prompts:** redrawn in the style of the console's own monochrome prompts: each button a solid
+  shape (disc for the face buttons and sticks, a low pill for L1/R1, a trigger shape for L2/R2, an upright pill for
+  Options and Create) with its symbol or name cut out, so the menus' tint fills the button and the symbol reads
+  clearly. Soft edges: the old hard-edged glyphs (from when they had to fit in the archive) showed steps when the
+  game draws the 64-pixel cells large on a 4K picture. The highlighted versions' glow stays outside the button so
+  the cut-out stays clear. The PC game files have no PS3 prompts to use: the PS3 build's interface files were not
+  shipped on PC (only the Pip-Boy arm, terminal screens and a legal screen have PS3 copies).
 - **v28, DualSense fixes:** v27's run-time lookup of the pad functions failed on the console ("trigger effects not
   available"), so no trigger effect was ever sent and turning Light Bar Health off could not hand the light bar
   back. scePadSetTriggerEffect and scePadResetLightBar are now imported directly (the pad library SDL already
