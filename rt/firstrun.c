@@ -97,6 +97,7 @@ static const struct { const char *key, *def; } g_own[] = {
   {"iLightBar", "1"},          /* DualSense light bar shows health: 0 off, 1 on (dualsense.c; Settings > Controls) */
   {"iFastMath", "1"},          /* native versions of the game's hottest maths routines: 0 runs the originals (fastmath.c) */
   {"iProfiler", "1"},          /* main-thread profile in fnv.log once a minute: 0 off (prof.c) */
+  {"bDebugMenu", "0"},         /* debug rows in Settings > Controls: 0 hidden, 1 shown (options.c) */
 };
 
 static void prefs_path(char *out, size_t n) {

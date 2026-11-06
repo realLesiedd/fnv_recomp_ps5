@@ -202,6 +202,14 @@ static void console_line(Ctx *c, const char *line) {
   rt_log("console: %s (%s)", line, ok ? "ran" : "returned 0");
 }
 
+/* options.c's debug menu runs lines through here too. The Script calls stay in console_line.
+   eax/ecx/edx are put back: CompileAndRun changes them, and the input poll still needs them. */
+void console_run(Ctx *c, const char *line) {
+  u32 eax = c->r[0], ecx = c->r[1], edx = c->r[2];
+  console_line(c, line);
+  c->r[0] = eax; c->r[1] = ecx; c->r[2] = edx;
+}
+
 void console_script(void) {
   static int n = -1, next;
   static struct { double t; char cmd[200]; } ev[32];
@@ -227,8 +235,6 @@ void console_script(void) {
   double t = now_s();
   if (!t0) t0 = t;
   if (t - t0 < ev[next].t) return;
-  u32 eax = c->r[0], ecx = c->r[1], edx = c->r[2];
-  console_line(c, ev[next].cmd);
-  c->r[0] = eax; c->r[1] = ecx; c->r[2] = edx;
+  console_run(c, ev[next].cmd);
   next++;
 }

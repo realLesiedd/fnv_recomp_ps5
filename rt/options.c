@@ -16,7 +16,8 @@
  * game saves itself, and raises the start menu's restart-required flag (0x75F6F0), as Texture Size does.
  * Frame Rate Cap and Performance Overlay (osd.c) apply at once and are kept in [fnv_recomp].
  *
- * Settings > Controls, after Vibration: Adaptive Triggers and Light Bar (dualsense.c), also at once. */
+ * Settings > Controls, after Vibration: Adaptive Triggers and Light Bar (dualsense.c), also at once.
+ * With bDebugMenu=1, five debug rows follow Light Bar Health. */
 #include "rt.h"
 #include "d3d9_internal.h"
 
@@ -31,6 +32,7 @@
 #define VIBRATION_CB    0x7D30E0u
 
 void rt_prefs_set(const char *sect, const char *key, const char *val); /* firstrun.c */
+int rt_setting_int(const char *key, int def);                          /* firstrun.c */
 extern int g_osd_mode, g_frame_cap;                                    /* osd.c */
 extern int g_ds_triggers, g_ds_lightbar, g_ds_strength;                /* dualsense.c */
 
@@ -106,7 +108,7 @@ static int lb_set(int i) { return onoff_set(&g_ds_lightbar, i, "iLightBar", "lig
 
 typedef struct {
   const char *name;
-  const char *values[4];
+  const char *values[10]; /* Place lists ten towns; the other rows use fewer */
   int count, width;
   int (*get)(void);
   int (*set)(int); /* returns 1 if a restart is needed */
@@ -163,7 +165,7 @@ static void add(Ctx *c, PortOption *o, u32 after_cb) {
   u32 size = 0x30;
   u32 obj = rt_call_guest(c, 0x401000u, 1, &size); /* operator new: the game frees it with its own delete */
   if (!obj) return;
-  u32 args[7 + 4] = {obj, guest_strdup(o->name), o->cb, o->modes, 0 /* named values */, (u32)o->count, (u32)o->width};
+  u32 args[7 + 10] = {obj, guest_strdup(o->name), o->cb, o->modes, 0 /* named values */, (u32)o->count, (u32)o->width};
   for (int i = 0; i < o->count; i++) args[7 + i] = guest_strdup(o->values[i]);
   rt_call_guest(c, 0x7D6350u, 7 + o->count, args);
 
@@ -193,6 +195,151 @@ static void remove_option(u32 cb) {
   M32(OPTIONS + 8) = n - 1;
 }
 
+/* ---- debug menu -----------------------------------------------------------------------------------------
+ * Hidden unless [fnv_recomp] bDebugMenu is 1 (firstrun.c writes 0 when the key is missing). Five rows on
+ * Settings > Controls, after Light Bar Health. Place only stores which town. Go queues that town's console
+ * line, unless the player has no cell (the main menu): then it logs and queues nothing. Test kit queues six
+ * player.additem lines, and its display path writes the index back to 0. God mode and Noclip are Off/On.
+ * They queue tgm or tcl only when the choice changes. The latch is memory for this launch: nothing is written
+ * to the ini, and a later load does not turn them back on.
+ *
+ * Callbacks only enqueue. debug_menu_pump, from the input poll next to console_script, runs one line once all
+ * of these have held for 30 polls: thread 0, a real player, a cell and max health above 0, MenuMode off, and
+ * the loading menu gone. A coc or cow line then starts that wait over, because it starts a load. If the
+ * loading menu appears while lines are still queued, the queue is dropped. The place row's value column is
+ * 120 so the label can be "Red Rock Canyon". */
+void console_run(Ctx *c, const char *line); /* dualsense.c: the one Script runner */
+
+#define DBG_PLAYER  0x11DEA3Cu /* PlayerCharacter*, same global as dualsense.c */
+#define DBG_MENU    0x702360u  /* MenuMode; 0 when no menu is up */
+#define DBG_LOAD    0x11DA0C0u /* loading-menu singleton (hooks.c); null when it is not up */
+#define DBG_HEALTH  16         /* actor value: health */
+#define DBG_SETTLE  30         /* polls the checks must hold before a line runs */
+#define DBG_Q       32
+
+static int g_place, g_god, g_clip, g_qn, g_qr, g_settle;
+static const char *g_q[DBG_Q];
+
+static int debug_vt(u32 v) { return v >= 0x00FD0000u && v < 0x01120000u; } /* an exe vtable, as in dualsense.c */
+
+static void debug_enqueue(const char *line) {
+  if (g_qn >= DBG_Q) { rt_log("debug: queue full, not queued: %s", line); return; }
+  g_q[(g_qr + g_qn) % DBG_Q] = line;
+  g_qn++;
+  rt_log("debug: queued %s", line);
+}
+
+static const char *const g_lines[10] = { /* same order as the Place row */
+  "coc Goodsprings", "coc Primm", "coc Novac", "coc Nipton", "coc Jacobstown", "coc RedRockCanyon",
+  "coc HooverDamExtMapCenter", "coc CampMcCarranGate", "coc FreesideCentral", "cow TheStripWorldNew 0 1",
+};
+static const char *const g_kit[6] = {
+  "player.additem 0000000F 5000", "player.additem 00015169 20", "player.additem 000E3778 1",
+  "player.additem 0008ED03 200", "player.additem 0007EA24 1", "player.additem 00004240 100",
+};
+
+static int debug_has_cell(void) {
+  u32 player = M32(DBG_PLAYER);
+  return player && debug_vt(M32(player)) && M32(player + 0x40);
+}
+
+static int place_get(void) { return g_place; }
+static int place_set(int i) { g_place = i; return 0; }
+static int go_get(void) { return 0; } /* display path writes the index back to 0, so the next press is a change */
+static int go_set(int i) {
+  (void)i;
+  const char *line = g_lines[g_place >= 0 && g_place < 10 ? g_place : 0];
+  if (!debug_has_cell()) rt_log("debug: no cell, not queued: %s", line);
+  else debug_enqueue(line);
+  return 0;
+}
+static int kit_get(void) { return 0; }
+static int kit_set(int i) {
+  (void)i;
+  for (int k = 0; k < 6; k++) debug_enqueue(g_kit[k]);
+  return 0;
+}
+static int god_get(void) { return g_god; }
+static int god_set(int i) {
+  int on = i != 0;
+  if (on != g_god) { g_god = on; debug_enqueue("tgm"); }
+  return 0;
+}
+static int clip_get(void) { return g_clip; }
+static int clip_set(int i) {
+  int on = i != 0;
+  if (on != g_clip) { g_clip = on; debug_enqueue("tcl"); }
+  return 0;
+}
+
+static void cb_place(Ctx *c), cb_go(Ctx *c), cb_kit(Ctx *c), cb_god(Ctx *c), cb_clip(Ctx *c);
+static PortOption g_dbg[] = {
+  {"Debug: Place",
+   {"Goodsprings", "Primm", "Novac", "Nipton", "Jacobstown", "Red Rock Canyon", "Hoover Dam", "Camp McCarran", "Freeside", "The Strip"},
+   10, 120, place_get, place_set, 0x40, 0},
+  /* two names, the same word: one left/right press changes the index, and the label stays put */
+  {"Debug: Go", {"GO", "GO"}, 2, 0, go_get, go_set, 0x40, 0},
+  {"Debug: Test kit", {"GIVE", "GIVE"}, 2, 0, kit_get, kit_set, 0x40, 0},
+  {"Debug: God mode", {"OFF", "ON"}, 2, 0, god_get, god_set, 0x40, 0},
+  {"Debug: Noclip", {"OFF", "ON"}, 2, 0, clip_get, clip_set, 0x40, 0},
+};
+static const HostFn g_dbg_cb[5] = {cb_place, cb_go, cb_kit, cb_god, cb_clip};
+static void cb_place(Ctx *c) { changed(c, &g_dbg[0]); }
+static void cb_go(Ctx *c) { changed(c, &g_dbg[1]); }
+static void cb_kit(Ctx *c) { changed(c, &g_dbg[2]); }
+static void cb_god(Ctx *c) { changed(c, &g_dbg[3]); }
+static void cb_clip(Ctx *c) { changed(c, &g_dbg[4]); }
+
+static void debug_menu_add(Ctx *c, u32 after) {
+  int first = !g_dbg[0].cb;
+  for (int i = 0; i < 5; i++) {
+    if (!g_dbg[i].cb) g_dbg[i].cb = rt_thunk(g_dbg_cb[i], g_dbg[i].name);
+    add(c, &g_dbg[i], after);
+    after = g_dbg[i].cb;
+  }
+  if (first) rt_log("options: debug menu on Controls, after Light Bar Health");
+}
+
+/* in a cell, with health, and not in a menu. Guest calls: the caller's registers are saved by the pump. */
+static int debug_ready(Ctx *c) {
+  u32 player = M32(DBG_PLAYER);
+  if (!player || !debug_vt(M32(player)) || !M32(player + 0x40)) return 0;
+  u32 av = player + 0xA4;
+  if (!debug_vt(M32(av))) return 0;
+  u32 code = DBG_HEALTH;
+  c->r[1] = av;
+  if ((int)rt_call_guest(c, M32(M32(av) + 0x1C), 1, &code) <= 0) return 0; /* max health, as read_state */
+  return (rt_call_guest(c, DBG_MENU, 0, NULL) & 0xFF) == 0;
+}
+
+static int debug_travel(const char *s) {
+  return s[0] == 'c' && s[1] == 'o' && (s[2] == 'c' || s[2] == 'w') && s[3] == ' ';
+}
+
+void debug_menu_pump(void) {
+  if (!g_qn) return; /* nothing waiting: one integer check, no guest call */
+  Ctx *c = rt_current();
+  if (!c || c->thread_index != 0) return; /* another thread's poll does not count */
+  static int busy;
+  if (busy) return; /* CompileAndRun polls the pad; one line at a time */
+  busy = 1;
+  u32 eax = c->r[0], ecx = c->r[1], edx = c->r[2];
+  if (M32(DBG_LOAD)) {
+    rt_log("debug: loading menu, queue dropped");
+    g_qn = 0; g_qr = 0; g_settle = 0;
+  } else if (!debug_ready(c)) {
+    g_settle = 0;
+  } else if (++g_settle >= DBG_SETTLE) {
+    const char *line = g_q[g_qr];
+    g_qr = (g_qr + 1) % DBG_Q;
+    g_qn--;
+    console_run(c, line);
+    if (debug_travel(line)) g_settle = 0; /* a teleport runs alone, then the wait starts over */
+  }
+  c->r[0] = eax; c->r[1] = ecx; c->r[2] = edx;
+  busy = 0;
+}
+
 /* called when the start menu is set up (from its init hook, before the original runs). The guest calls change
    eax/ecx/edx, which the original init still needs (ecx is its this), so they are put back. */
 void port_options_install(Ctx *c) {
@@ -210,6 +357,7 @@ void port_options_install(Ctx *c) {
     add(c, &g_opts[i], after);
     after = g_opts[i].cb;
   }
+  if (rt_setting_int("bDebugMenu", 0) == 1) debug_menu_add(c, after);
   if (index_of_cb(0x7D2FC0u) >= 0 && (rt_call_guest(c, 0x7D30D0u, 0, NULL) & 0xFF)) { /* the gamepad was turned off */
     u32 input = rt_call_guest(c, 0x4B7210u, 0, NULL), off = 0;
     if (input) { c->r[1] = input; rt_call_guest(c, 0x719740u, 1, &off); rt_log("options: the controller had been turned off; turned back on"); }
