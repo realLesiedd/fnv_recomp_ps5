@@ -27,6 +27,11 @@ owner decides anything this file doesn't cover. Read this, [STATUS.md](STATUS.md
 | **FNV HELPER** | "Future plans" in STATUS.md, `docs/OPEN_QUESTIONS.md`, `docs/research/`, `CHANGELOG.md`, `.github/` | Research, docs, release paperwork, and small code changes that Claude builds |
 
 To change a file the other assistant owns, ask in the issue first. Never edit the other assistant's branch.
+
+**While Claude is away** (the owner says when), FNV HELPER owns every file, Claude's included, and follows
+[docs/HANDOVER.md](docs/HANDOVER.md). The merge rule doesn't change: code is merged only after the owner has tested
+it on the PS5. When Claude is back, it reads the open issues and pull requests and STATUS.md before changing
+anything.
 `README.md` is shared: keep changes small, and say in the pull request what changed.
 
 ## How work moves
@@ -56,16 +61,19 @@ Waiting for Claude's answer on one issue doesn't stop work on the others.
 
 ## Merging
 
-- **Docs only:** the owner merges after Claude comments "ready".
-- **Code:** Claude builds it into a test build, the owner tests it on the PS5, then the owner merges.
+- **Docs only:** the owner merges after Claude comments "ready" (while Claude is away: after the owner has read it).
+- **Code:** it goes into a test build (Claude's, or while Claude is away, the builder the owner chose). The owner
+  tests it on the PS5, then merges it.
 - Nobody merges their own pull request without the owner's go-ahead.
 - Commits on `main` appear under the owner's GitHub account (noreply address). Assistants don't add their own
   names or sign-off lines to commits.
 
 ## Builds and testing
 
-- Only Claude builds: it needs the owner's own `FalloutNV.exe` and the PS5 toolchain. FNV HELPER doesn't need
-  the game, and must never ask for the executable, game files or any login.
+- Builds need the owner's own `FalloutNV.exe` and the PS5 toolchain ([docs/HANDOVER.md](docs/HANDOVER.md)). Claude
+  builds. While Claude is away, whoever the owner chooses builds. The owner decides who may use the executable and
+  where. It is never committed, uploaded publicly, put in an issue or passed on. Nobody asks for game files,
+  saves or any login.
 - Builds cost compute. Changes are batched so the owner tests one build at a time, and builds happen only when
   there's something to test.
 - The console: PS5, system software 13.42. The app is `PPSA97701`. Its logs are `fnv.log` and `_d3d9.log` in
