@@ -150,10 +150,13 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
-  - The Pip-Boy arm (a 3D model texture) still says LT/RT. The game's own PS3 version says L1/R1 (the PS3 put
-    the tabs on the shoulder buttons), which would be wrong for the DualSense, where the tabs are on L2/R2. The arm
-    needs its labels redrawn as L2/R2; not done yet. The platform-name table (0x1189038: PC, XBOX, PS3, PS3O)
-    would switch every controller texture to the PS3 set if ever wanted.
+- **v23, Pip-Boy arm says L2/R2:** the arm model's texture has LT and RT printed on the two tags beside the tab
+  buttons (textures\pipboy3000\pipboyarm01.dds; the Xbox copy is the same). When it is uploaded (at 1024, or 512
+  with a lower texture setting) it is recognised by fingerprint, the old letters are erased and filled from the tag
+  around them, and L2/R2 is painted in their colour; the first mip levels are rebuilt from the result. The game's own
+  PS3 arm says L1/R1 (the PS3 had the tabs on the shoulder buttons), which would be wrong here: on the DualSense the
+  tabs are on L2/R2. The platform-name table (0x1189038: PC, XBOX, PS3, PS3O) would switch every controller texture
+  to the PS3 set if ever wanted.
 - **To watch:** stutters in game; frame rate outdoors at the longer draw distances; dust and smoke clouds
   (player video: heavy orange sheets with hard edges, cause not found yet). The old "all threads 100%" figure came from a
   process clock that is not meaningful on PS5; v14 uses getrusage plus per-thread clocks.

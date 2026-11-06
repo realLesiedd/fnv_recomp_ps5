@@ -6,7 +6,11 @@ its UI atlas (textures\\interface\\interfaceshared0.dds, 1024x1024 DXT5); these 
 cells and their mipmaps, built into the executable (tools/embed_assets.py), and rt/glyphs.c writes them into the
 atlas when the game uploads it. White on transparent: the menus tint them.
 
-Usage: make_glyphs.py ASSETS_DIR   (writes ASSETS_DIR/internal/atlas_glyphs/*.dxt5)
+The Pip-Boy arm's printed trigger tags (LT/RT on the arm model's texture) are relabelled L2/R2: arm_label writes the
+lettering as 8-bit coverage masks (a byte each for width and height, then the rows) that rt/glyphs.c paints over the
+erased tags.
+
+Usage: make_glyphs.py ASSETS_DIR   (writes ASSETS_DIR/internal/atlas_glyphs/*.dxt5, ASSETS_DIR/internal/arm_labels/*.a8)
 Needs Pillow and DejaVu Sans Bold (fonts-dejavu-core)."""
 import os, struct, sys
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -162,6 +166,16 @@ def write_atlas_cell(path, im):
         f.write(bytes(data))
 
 
+def arm_label(path, label, w, h):
+    """the lettering for one arm tag, squeezed to the box the old letters took (bold, like the arm's own stencil)"""
+    f = ImageFont.truetype(FONT, 100)
+    c = Image.new('L', (400, 200), 0)
+    ImageDraw.Draw(c).text((10, 10), label, font=f, fill=255)
+    c = c.crop(c.getbbox()).resize((w, h), Image.BOX)
+    with open(path, 'wb') as out:
+        out.write(bytes([w, h]) + c.tobytes())
+
+
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else 'assets'
     cells = os.path.join(root, 'internal', 'atlas_glyphs')
@@ -173,6 +187,10 @@ def main():
     for k in ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'ls', 'rs', 'up', 'start', 'back']:
         write_atlas_cell(os.path.join(cells, 'glow_general_button_%s.dxt5' % k), finish(alpha[k], 64, True)); n += 1
     print('wrote', n, 'atlas cells to', cells)
+    labels = os.path.join(root, 'internal', 'arm_labels')
+    os.makedirs(labels, exist_ok=True)
+    arm_label(os.path.join(labels, 'l2.a8'), 'L2', 20, 13)  # box sizes: rt/glyphs.c g_tags
+    arm_label(os.path.join(labels, 'r2.a8'), 'R2', 25, 13)
 
 
 if __name__ == '__main__':
