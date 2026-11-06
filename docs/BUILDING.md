@@ -48,11 +48,11 @@ Compiling `gen/` takes about 20 CPU-minutes.
 |---|---|
 | `tools/recomp.py` | Reads the executable and checks it against the fnv_decomp fingerprints. Finds every function (seeded with the decomp's 68,657 known function addresses, then relocations, call targets and jump tables) and writes one C function for each. |
 | `rt/x86.h` | x86 semantics. Guest memory is a 4 GiB window at a fixed host address. Registers are C locals, flags are computed lazily, x87 uses a double-precision stack and SSE uses 128-bit unions. |
-| `rt/main.c` | The loader. Checks the player's executable, maps its sections, binds imports to host functions, sets up TEB/PEB/TLS, dispatches indirect calls and reports faults with the guest call stack. |
+| `rt/main.c` | The loader. Checks the player's executable, maps its sections, binds imports to host functions, sets up TEB/PEB/TLS, dispatches indirect calls and reports a fault with a host backtrace. On Linux the `f_` names in that backtrace are guest functions. |
 | `rt/mem.c` | VirtualAlloc-style reservations and the heap behind HeapAlloc. |
 | `rt/kernel32.c` and the other `rt/*.c` files | The Windows API the game imports: threads, synchronisation, files on a virtual `C:` drive, INI files, DirectSound, DirectShow, XInput and more. |
 | `rt/d3d9.c`, `rt/hostd3d9.cpp` | The Direct3D 9 front end and its link to DXVK. |
-| `rt/platform_sdl.c` | Window, video output, audio and the DualSense, through SDL2 (on the PS5, its PS5 port). |
+| `rt/platform_sdl.c` | On Linux: the window, the software-renderer picture, audio and the pad, through SDL2. On PS5 the picture is DXVK to the TV. SDL there is the DualSense and audio only, and the window is a token. |
 
 Each guest function at `0xADDR` becomes `void f_ADDR(Ctx *c)`. Calls push the real return address on the guest
 stack, so the stack layout matches the original, and `ret` returns from the C function.
