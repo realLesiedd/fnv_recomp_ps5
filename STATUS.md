@@ -154,6 +154,12 @@ Superseded as a plan. Written before the PS5 build played, and left as it was. A
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v41, FNV HELPER's debug menu and release packaging (#15, #14):** hidden Settings > Controls debug rows
+  (`[fnv_recomp] bDebugMenu=1` in FalloutPrefs.ini): teleport, test kit, god mode, noclip. They queue console lines
+  that run from the pad poll once the player is in a cell with menus closed for 30 polls. `ps5/build.sh` stamps the
+  packaged param.json contentVersion from FNV_RELEASE (01.041.000). The v40 log explained the quiet first-person
+  footsteps (#16): a flat sound the game sets to about -15 dB, against a 3D sound at the feet in third person.
+  The audio sliders barely change it (#20, FNV HELPER).
 - **v40, footstep sounds traced to the end:** the owner's v39 log (PS5, Goodsprings, both views) showed the game
   starting flat (2D) footstep sounds every ~0.42 s in both views at audible volume (first person: a pair, one at
   full volume and one at about -15 dB; third person: one), and PlayFootstepImpact (0x8391B0) never called. On
