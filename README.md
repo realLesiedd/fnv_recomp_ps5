@@ -23,6 +23,7 @@ files.
 - [Controls](#controls)
 - [Settings](#settings)
 - [Known issues](#known-issues)
+- [Changelog](CHANGELOG.md)
 - [FAQ](#faq)
 - [Building from source](#building-from-source)
 - [Credits](#credits)
@@ -47,7 +48,7 @@ files.
 
 | | Version |
 |---|---|
-| fnv_recomp | v35 (testing build) |
+| fnv_recomp | v36 (testing build) |
 | Fallout: New Vegas for PC | 1.4.0.525 |
 | PS5 system software | Tested on 13.42 |
 
@@ -139,7 +140,7 @@ The PC-only options 360 Controller and Mouse Sensitivity are removed.
   ties that dip to the draw count, which that note reads as the idle camera. Memory stays flat.
 - Trophies, a mods folder and NVSE plugins are not supported yet.
 
-Progress notes for each version are in [STATUS.md](STATUS.md).
+What changed in each version is in [CHANGELOG.md](CHANGELOG.md). Developer notes are in [STATUS.md](STATUS.md).
 
 ## FAQ
 
@@ -157,8 +158,31 @@ this has not been tested widely.
 **Can I use mods?**
 Not yet. A mods folder with an on/off switch, and a safe mode, are planned.
 
+**How do I reset the settings?**
+Delete these two files, and leave the rest of that folder alone, including `Saves`:
+
+```
+/data/homebrew/PPSA97701/user/Documents/My Games/FalloutNV/FalloutPrefs.ini
+/data/homebrew/PPSA97701/user/Documents/My Games/FalloutNV/Fallout.ini
+```
+
+The next start creates them again. `Fallout.ini` is copied from `game/Fallout_default.ini`.
+`FalloutPrefs.ini` is rebuilt from the game's Very High preset at 3840×2160, with multisampling off, and the
+port's own defaults: performance overlay off, frame rate cap 60, adaptive triggers on, trigger strength Strong,
+and light bar on. The main-thread profiler in the log comes back on, because that is its default.
+
+Deleting only `FalloutPrefs.ini` resets the picture, the port's options and the profiler. Deleting only
+`Fallout.ini` restores the game's default config and leaves the picture settings as they are. Leaving the files
+in place and starting again does not reset them.
+
+One setting is not restored to the game's own value. On every start, including after these files are recreated,
+the port turns off multi-threaded face creation in `Fallout.ini`. Leaving it on can hang while a save loads.
+
 **Where do I report a bug?**
-Open an issue with what happened, what you were doing, and your `fnv.log`.
+Open an issue with what happened, what you were doing, whether it happens again, the port version (the first
+line of `fnv.log`) and your PS5 system software version. Attach `fnv.log` and, if it is there, `_d3d9.log`,
+from `/data/homebrew/PPSA97701/`. Do not attach game files or saves you do not want public, and do not include
+personal details.
 
 ## Building from source
 
