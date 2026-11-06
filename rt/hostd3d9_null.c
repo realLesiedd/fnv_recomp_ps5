@@ -16,3 +16,10 @@ void hb_frame_end(double f, double p, double c, int cr, int de, double mb) { (vo
 void hb_readback(Obj *src, Obj *dst) {}
 void hb_release(Obj *o) { o->host = 0; }
 int hb_gpu_mem(char *out, int cap) { (void)out; (void)cap; return 0; }
+int hb_osd_begin(int *w, int *h) { (void)w; (void)h; return 0; }
+void hb_osd_rect(float x, float y, float w, float h, uint32_t argb) {}
+float hb_osd_text(float x, float y, float size, const char *s, uint32_t argb) { return 0; }
+float hb_osd_text_width(float size, const char *s) { return 0; }
+void hb_osd_end(void) {}
+int hb_gpu_load(int *compiling) { *compiling = 0; return -1; }
+int hb_vram_mb(unsigned *used, unsigned *budget) { (void)used; (void)budget; return 0; }

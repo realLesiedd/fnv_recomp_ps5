@@ -67,8 +67,7 @@ extern "C" int hb_init(void) {
      game and 331 MB of host memory free, so 8 */
   setenv("DXVK_CONFIG", "dxvk.numCompilerThreads = 8", 0);
   setenv("DXVK_LOG_PATH", "/app0", 0);
-  /* performance overlay for now: fps, frame times, GPU load (scaled for a 4K TV) */
-  setenv("DXVK_HUD", "fps,frametimes,gpuload,compiler,scale=4", 0);
+  /* DXVK's own HUD is off: the port draws its own overlay (osd.c), switchable in Settings > Display */
 #else
   setenv("DXVK_WSI_DRIVER", "SDL2", 0);
 #endif
@@ -679,11 +678,11 @@ static VkGipa_ vk_gipa(void) {
 }
 #endif
 
-extern "C" int hb_gpu_mem(char *out, int cap) {
+static bool gpu_budget(VkMemProps2_ *p, VkMemBudget_ *b) {
   static VkMemProps2Fn_ props2;
   static VkPhys_ phys;
   static int tried;
-  if (!g_d3d || g_active != 1) return 0;
+  if (!g_d3d || g_active != 1) return false;
   if (!tried) {
     tried = 1;
     VkInterop_ *it = NULL;
@@ -700,19 +699,206 @@ extern "C" int hb_gpu_mem(char *out, int cap) {
     }
     if (!props2) rt_log("perf: GPU memory figures unavailable (no Vulkan memory query)");
   }
-  if (!props2) return 0;
+  if (!props2) return false;
+  memset(b, 0, sizeof *b);
+  memset(p, 0, sizeof *p);
+  b->stype = 1000237000;
+  p->stype = 1000059006;
+  p->next = b;
+  props2(phys, p);
+  return true;
+}
+
+extern "C" int hb_gpu_mem(char *out, int cap) {
   VkMemBudget_ b;
   VkMemProps2_ p;
-  memset(&b, 0, sizeof b);
-  memset(&p, 0, sizeof p);
-  b.stype = 1000237000;
-  p.stype = 1000059006;
-  p.next = &b;
-  props2(phys, &p);
+  if (!gpu_budget(&p, &b)) return 0;
   int o = 0;
   for (uint32_t h = 0; h < p.props.heap_count && h < 16 && o < cap - 64; h++)
     o += snprintf(out + o, cap - o, "%sheap%u %s %llu/%llu MB", h ? ", " : "", h,
                   (p.props.heaps[h].flags & 1) ? "(VRAM)" : "(system)", (unsigned long long)(b.usage[h] >> 20),
                   (unsigned long long)(b.budget[h] >> 20));
   return o;
+}
+
+/* video memory in use and available (MB), over the device-local heaps; 0 if unknown */
+extern "C" int hb_vram_mb(unsigned *used, unsigned *budget) {
+  VkMemBudget_ b;
+  VkMemProps2_ p;
+  if (!gpu_budget(&p, &b)) return 0;
+  unsigned long long u = 0, t = 0;
+  for (uint32_t h = 0; h < p.props.heap_count && h < 16; h++)
+    if (p.props.heaps[h].flags & 1) { u += b.usage[h]; t += b.budget[h]; }
+  *used = (unsigned)(u >> 20);
+  *budget = (unsigned)(t >> 20);
+  return t > 0;
+}
+
+/* ---- performance overlay (osd.c lays it out; drawn here, last, into the game's back buffer) -----------------
+ * One textured triangle list per frame: the font (tools/make_osd_font.py) is the only texture, and solid areas use
+ * a texel from its block character. The game's device state is captured in a state block and put back, and the
+ * render targets it had are put back, so the front end's view of the device stays true. */
+extern "C" const unsigned char *rt_asset(const char *path, size_t *size); /* overlay.c */
+extern "C" int dxvk_fnv_stats(uint64_t *out, int n) __attribute__((weak)); /* our DXVK patch */
+
+struct OsdV { float x, y, z, w; DWORD c; float u, v; };
+static IDirect3DTexture9 *g_osd_tex;
+static IDirect3DStateBlock9 *g_osd_sb;
+static int g_osd_cw, g_osd_ch, g_osd_first, g_osd_count, g_osd_tw, g_osd_th, g_osd_failed;
+static OsdV *g_osd_v;
+static int g_osd_n, g_osd_cap;
+
+static bool osd_font(void) {
+  if (g_osd_tex) return true;
+  if (g_osd_failed) return false;
+  g_osd_failed = 1;
+  size_t sz = 0;
+  const unsigned char *a = rt_asset("internal/osd_font.a8", &sz);
+  if (!a || sz < 8) return false;
+  g_osd_cw = a[0]; g_osd_ch = a[1]; g_osd_first = a[2]; g_osd_count = a[3];
+  g_osd_tw = a[4] | a[5] << 8; g_osd_th = a[6] | a[7] << 8;
+  if (sz < 8 + (size_t)g_osd_tw * g_osd_th) return false;
+  const int levels = 4; /* drawn smaller on a 720p picture: mipmaps keep it smooth */
+  if (FAILED(g_dev->CreateTexture(g_osd_tw, g_osd_th, levels, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &g_osd_tex, NULL))) return false;
+  unsigned char *cov = (unsigned char *)malloc((size_t)g_osd_tw * g_osd_th);
+  memcpy(cov, a + 8, (size_t)g_osd_tw * g_osd_th);
+  int w = g_osd_tw, h = g_osd_th;
+  for (int l = 0; l < levels; l++) {
+    D3DLOCKED_RECT lr;
+    if (SUCCEEDED(g_osd_tex->LockRect(l, &lr, NULL, 0))) {
+      for (int y = 0; y < h; y++) {
+        uint32_t *row = (uint32_t *)((char *)lr.pBits + (size_t)y * lr.Pitch);
+        for (int x = 0; x < w; x++) row[x] = (uint32_t)cov[y * w + x] << 24 | 0xFFFFFF;
+      }
+      g_osd_tex->UnlockRect(l);
+    }
+    if (w < 2 || h < 2) break;
+    for (int y = 0; y < h / 2; y++) /* next level: average of 2x2 */
+      for (int x = 0; x < w / 2; x++)
+        cov[y * (w / 2) + x] = (unsigned char)((cov[2 * y * w + 2 * x] + cov[2 * y * w + 2 * x + 1] + cov[(2 * y + 1) * w + 2 * x] +
+                                                cov[(2 * y + 1) * w + 2 * x + 1] + 2) / 4);
+    w /= 2; h /= 2;
+  }
+  free(cov);
+  g_osd_failed = 0;
+  return true;
+}
+
+static void osd_quad(float x, float y, float w, float h, float u0, float v0, float u1, float v1, uint32_t c) {
+  if (g_osd_n + 6 > g_osd_cap) {
+    g_osd_cap = g_osd_cap ? g_osd_cap * 2 : 4096;
+    g_osd_v = (OsdV *)realloc(g_osd_v, g_osd_cap * sizeof *g_osd_v);
+  }
+  x -= 0.5f; y -= 0.5f; /* D3D9 pixel centres */
+  OsdV a = {x, y, 0, 1, c, u0, v0}, b = {x + w, y, 0, 1, c, u1, v0}, d = {x, y + h, 0, 1, c, u0, v1}, e = {x + w, y + h, 0, 1, c, u1, v1};
+  OsdV *v = g_osd_v + g_osd_n;
+  v[0] = a; v[1] = b; v[2] = d; v[3] = b; v[4] = e; v[5] = d;
+  g_osd_n += 6;
+}
+
+/* starts an overlay; gives the back buffer's size; 0 when there is nothing to draw on */
+extern "C" int hb_osd_begin(int *w, int *h) {
+  g_osd_n = 0;
+  if (!g_dev || !g_host_bb || !osd_font()) return 0;
+  D3DSURFACE_DESC d;
+  g_host_bb->GetDesc(&d);
+  *w = (int)d.Width; *h = (int)d.Height;
+  return 1;
+}
+
+extern "C" void hb_osd_rect(float x, float y, float w, float h, uint32_t argb) {
+  int i = 127 - g_osd_first; /* the block character: a texel from its middle */
+  float u = ((i % 16) * g_osd_cw + g_osd_cw / 2.0f) / g_osd_tw, v = ((i / 16) * g_osd_ch + g_osd_ch / 2.0f) / g_osd_th;
+  osd_quad(x, y, w, h, u, v, u, v, argb);
+}
+
+/* text at x,y (top left), size = character height in pixels; returns its width. Character 128 is a degree sign. */
+extern "C" float hb_osd_text(float x, float y, float size, const char *s, uint32_t argb) {
+  float cw = size * g_osd_cw / g_osd_ch * 0.92f, x0 = x; /* a little tighter than the cell */
+  for (; *s; s++) {
+    int ch = (unsigned char)*s;
+    if (ch != ' ' && ch >= g_osd_first && ch < g_osd_first + g_osd_count) {
+      int i = ch - g_osd_first;
+      float u0 = (float)((i % 16) * g_osd_cw) / g_osd_tw, v0 = (float)((i / 16) * g_osd_ch) / g_osd_th;
+      float u1 = u0 + (float)g_osd_cw / g_osd_tw, v1 = v0 + (float)g_osd_ch / g_osd_th;
+      float gw = size * g_osd_cw / g_osd_ch;
+      osd_quad(x - (gw - cw) / 2, y, gw, size, u0, v0, u1, v1, argb);
+    }
+    x += cw;
+  }
+  return x - x0;
+}
+extern "C" float hb_osd_text_width(float size, const char *s) { return strlen(s) * size * g_osd_cw / g_osd_ch * 0.92f; }
+
+extern "C" void hb_osd_end(void) {
+  if (!g_osd_n || !g_dev) return;
+  Prof prof_(T_OTHER);
+  begin_scene();
+  if (!g_osd_sb) { if (FAILED(g_dev->CreateStateBlock(D3DSBT_ALL, &g_osd_sb))) return; }
+  else g_osd_sb->Capture();
+  IDirect3DSurface9 *rt[4] = {}, *ds = NULL;
+  for (int i = 0; i < 4; i++) g_dev->GetRenderTarget(i, &rt[i]);
+  g_dev->GetDepthStencilSurface(&ds);
+  g_dev->SetRenderTarget(0, g_host_bb);
+  for (int i = 1; i < 4; i++) if (rt[i]) g_dev->SetRenderTarget(i, NULL);
+  g_dev->SetDepthStencilSurface(NULL);
+  g_dev->SetVertexShader(NULL);
+  g_dev->SetPixelShader(NULL);
+  g_dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1);
+  g_dev->SetTexture(0, g_osd_tex);
+  for (int i = 1; i < 8; i++) g_dev->SetTexture(i, NULL);
+  static const DWORD rs[][2] = {
+    {D3DRS_ZENABLE, FALSE}, {D3DRS_ZWRITEENABLE, FALSE}, {D3DRS_ALPHATESTENABLE, FALSE}, {D3DRS_ALPHABLENDENABLE, TRUE},
+    {D3DRS_SRCBLEND, D3DBLEND_SRCALPHA}, {D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA}, {D3DRS_BLENDOP, D3DBLENDOP_ADD},
+    {D3DRS_SEPARATEALPHABLENDENABLE, FALSE}, {D3DRS_CULLMODE, D3DCULL_NONE}, {D3DRS_STENCILENABLE, FALSE},
+    {D3DRS_SCISSORTESTENABLE, FALSE}, {D3DRS_COLORWRITEENABLE, 0xF}, {D3DRS_FOGENABLE, FALSE}, {D3DRS_LIGHTING, FALSE},
+    {D3DRS_SRGBWRITEENABLE, FALSE}, {D3DRS_FILLMODE, D3DFILL_SOLID}, {D3DRS_CLIPPLANEENABLE, 0},
+  };
+  for (auto &r : rs) g_dev->SetRenderState((D3DRENDERSTATETYPE)r[0], r[1]);
+  g_dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+  g_dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+  g_dev->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+  g_dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+  g_dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+  g_dev->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+  g_dev->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, 0);
+  g_dev->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+  g_dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+  g_dev->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+  g_dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+  g_dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+  g_dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+  g_dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+  g_dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+  g_dev->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
+  g_dev->SetSamplerState(0, D3DSAMP_MAXMIPLEVEL, 0);
+  g_dev->SetSamplerState(0, D3DSAMP_MIPMAPLODBIAS, 0);
+  g_dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, g_osd_n / 3, g_osd_v, sizeof(OsdV));
+  for (int i = 0; i < 4; i++) {
+    if (i == 0 || rt[i]) g_dev->SetRenderTarget(i, rt[i]);
+    if (rt[i]) rt[i]->Release();
+  }
+  g_dev->SetDepthStencilSurface(ds);
+  if (ds) ds->Release();
+  g_osd_sb->Apply(); /* after the render targets: setting one resets the viewport */
+  g_osd_n = 0;
+}
+
+/* GPU busy share since the last call (0-100), and whether shaders are being compiled; -1 if unknown */
+extern "C" int hb_gpu_load(int *compiling) {
+  static uint64_t last_idle, last_us;
+  uint64_t c[4];
+  *compiling = 0;
+  if (!dxvk_fnv_stats || dxvk_fnv_stats(c, 4) < 4) return -1;
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  uint64_t now = (uint64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+  *compiling = c[2] > c[1] ? (int)(c[2] - c[1]) : 0;
+  int load = -1;
+  if (last_us && now > last_us) {
+    uint64_t span = now - last_us, idle = c[0] - last_idle;
+    load = idle >= span ? 0 : (int)(100 * (span - idle) / span);
+  }
+  last_idle = c[0]; last_us = now;
+  return load;
 }

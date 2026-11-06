@@ -34,7 +34,8 @@ fnv_recomp stands on the work of these projects and people. Thank you.
 ## Libraries and tools
 - **[Capstone](https://www.capstone-engine.org/)** (x86 disassembly in the recompiler), **[pefile](https://github.com/erocarrera/pefile)**.
 - **[SDL2](https://libsdl.org)** (Sam Lantinga and contributors).
-- **[DXVK](https://github.com/doitsujin/dxvk)** (Philip Rebohle and contributors, zlib license): Direct3D 9 on Vulkan, the GPU renderer (`rt/hostd3d9.cpp` drives its native d3d9 build).
+- **[DXVK](https://github.com/doitsujin/dxvk)** (Philip Rebohle and contributors, zlib license): Direct3D 9 on Vulkan, the GPU renderer (`rt/hostd3d9.cpp` drives its native d3d9 build). `ps5/dxvk/dxvk-ps5.patch` adds a PS5 display
+  backend and `dxvk_fnv_stats` (GPU idle time and shader-compile counters, for the performance overlay).
 - **[SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD)** for downloading the player's own copy.
 - **[stb_vorbis](https://github.com/nothings/stb)** (Sean Barrett and contributors, public domain or MIT): decodes the
   game's Ogg Vorbis voices and effects behind the libvorbisfile calls (`rt/vorbis.c`). Bundled unmodified in
@@ -48,8 +49,9 @@ fnv_recomp stands on the work of these projects and people. Thank you.
   Bink container is parsed in `rt/bink.c`. Under the LGPL you may relink the app against your own FFmpeg build:
   the full source of everything else is in this repository and `ps5/build.sh` does the link.
 - **[DejaVu Fonts](https://dejavu-fonts.github.io/)** (Bitstream Vera license): DejaVu Sans Bold letters the
-  L1/R1/L2/R2/L3/R3 glyphs drawn by `tools/make_glyphs.py`. The PlayStation-style button prompts (`assets/`) are
-  original drawings made for this project, not Sony artwork.
+  L1/R1/L2/R2/L3/R3 glyphs drawn by `tools/make_glyphs.py`, and DejaVu Sans Mono Bold is the performance overlay's
+  font (`tools/make_osd_font.py`). The PlayStation-style button prompts (`assets/`) are original drawings made for
+  this project, not Sony artwork.
 - **[Wine](https://www.winehq.org/)** (LGPL): its documentation of DirectSound and WINMM mmio behaviour was the
   reference for corner cases in `rt/dsound.c` and `rt/mmio.c` (no Wine code is used).
 

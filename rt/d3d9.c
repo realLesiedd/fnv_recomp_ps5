@@ -164,10 +164,14 @@ static int g_shot_every, g_render_every;
 static void be_present_shot(void);
 static void be_platform_present(void);
 u64 g_d3d_frames;
+u64 d3d_draw_count(void) { return g_draws; }
+void osd_frame(void), osd_frame_limit(void); /* osd.c */
 static void be_present(void) {
   g_d3d_frames = g_frames + 1;
   if (hb_active()) hb_movie_overlay(); /* a playing Bink movie, over the frame */
+  osd_frame(); /* the performance overlay, over everything */
   be_present_shot();
+  osd_frame_limit(); /* Settings > Display > Frame Rate Cap */
   struct timespec p0, p1;
   clock_gettime(CLOCK_MONOTONIC, &p0);
   be_platform_present();

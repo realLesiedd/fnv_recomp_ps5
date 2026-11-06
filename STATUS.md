@@ -150,6 +150,20 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v26, performance overlay and frame-rate cap, both in Settings > Display and applied at once:**
+  - The overlay (rt/osd.c, drawn by hostd3d9.cpp over the finished frame) replaces DXVK's HUD, which could not be
+    switched while running. Off, Basic (fps and frame time) or Detailed, in the style of MSI Afterburner: fps with
+    the 1% low, frame time and a 240-frame graph with 30/60 lines, CPU (main thread, and the process in cores, CPU
+    temperature on the PS5), GPU busy share from DXVK's GPU idle time and shaders being compiled (our DXVK patch
+    exports dxvk_fnv_stats; SoC temperature on the PS5), video memory in use of the budget, the game's memory and
+    what the console has left, resolution and draw calls. Drawn in one triangle list with its own font
+    (tools/make_osd_font.py); the game's device state is captured in a state block and put back, with its render
+    targets.
+  - Frame Rate Cap 30 or 60 (osd.c): waits before Present until 1/cap s has passed. The game times each frame
+    itself, so a 30 cap only means larger steps (Havok substeps at its usual 1/60 s, as on the consoles, which ran
+    at 30); never above 60, where the engine's physics go wrong. Checked: from 42 fps in the menu to a steady 30.0.
+  - rt/options.c (was resolution.c) holds the three port options as a table.
+  - [fnv_recomp] iPerfOverlay (0-2, default 2) and iFrameCap (30/60, default 60) keep the choices.
 - **v25, 4K and a Resolution option:** the game renders at iSize W x iSize H from FalloutPrefs.ini (read once at
   start-up); the PS5's TV output was already 4K (DXVK's PS5 display code picks the TV's 3840x2160 mode) with the
   game's 1280x720 image scaled up to it. Now:

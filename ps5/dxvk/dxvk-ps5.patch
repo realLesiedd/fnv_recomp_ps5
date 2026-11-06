@@ -31,6 +31,18 @@ index 98851af..1e3b4ab 100644
  option('native_sdl2',  type : 'feature', value : 'auto', description: 'Enable SDL2 WSI for DXVK Native')
 +option('native_ps5',   type : 'boolean', value : false, description: 'PS5 WSI (VK_KHR_display on the console, fnv_recomp)')
  option('native_sdl3',  type : 'feature', value : 'auto', description: 'Enable SDL3 WSI for DXVK Native')
+diff --git a/src/d3d9/d3d9.sym b/src/d3d9/d3d9.sym
+index bbfaee0..8a9ecc8 100644
+--- a/src/d3d9/d3d9.sym
++++ b/src/d3d9/d3d9.sym
+@@ -20,6 +20,7 @@
+     Direct3D9ForceHybridEnumeration;
+     Direct3DCreate9On12;
+     Direct3DCreate9On12Ex;
++    dxvk_fnv_stats;
+ 
+   local:
+     *;
 diff --git a/src/d3d9/meson.build b/src/d3d9/meson.build
 index 2f45946..42ead01 100644
 --- a/src/d3d9/meson.build
@@ -69,6 +81,52 @@ index 2f45946..42ead01 100644
  
  d3d9_dep = declare_dependency(
    link_with           : [ d3d9_dll ],
+diff --git a/src/dxvk/dxvk_device.cpp b/src/dxvk/dxvk_device.cpp
+index a35626f..534a517 100644
+--- a/src/dxvk/dxvk_device.cpp
++++ b/src/dxvk/dxvk_device.cpp
+@@ -3,6 +3,26 @@
+ #include "dxvk_latency_builtin.h"
+ #include "dxvk_latency_reflex.h"
+ 
++namespace dxvk {
++  /* fnv_recomp: the most recent device, for dxvk_fnv_stats (the game's performance overlay) */
++  static std::atomic<DxvkDevice*> g_fnvDevice = { nullptr };
++}
++
++/* fnv_recomp: counters for the game's own performance overlay, without DXVK's HUD.
++   out[0] GPU idle time (microseconds, since the device was made), out[1] shader-compile tasks done,
++   out[2] shader-compile tasks queued in all, out[3] graphics pipelines made. Returns how many were written. */
++extern "C" __attribute__((visibility("default"))) int dxvk_fnv_stats(uint64_t* out, int n) {
++  dxvk::DxvkDevice* dev = dxvk::g_fnvDevice.load();
++  if (!dev || n < 4)
++    return 0;
++  dxvk::DxvkStatCounters c = dev->getStatCounters();
++  out[0] = c.getCtr(dxvk::DxvkStatCounter::GpuIdleTicks);
++  out[1] = c.getCtr(dxvk::DxvkStatCounter::PipeTasksDone);
++  out[2] = c.getCtr(dxvk::DxvkStatCounter::PipeTasksTotal);
++  out[3] = c.getCtr(dxvk::DxvkStatCounter::PipeCountGraphics);
++  return 4;
++}
++
+ namespace dxvk {
+   
+   DxvkDevice::DxvkDevice(
+@@ -23,11 +43,13 @@ namespace dxvk {
+     m_perfHints         (getPerfHints()),
+     m_objects           (this),
+     m_submissionQueue   (this, queueCallback) {
+-
++    g_fnvDevice.store(this);
+   }
+   
+   
+   DxvkDevice::~DxvkDevice() {
++    DxvkDevice* self = this;
++    g_fnvDevice.compare_exchange_strong(self, nullptr);
+     // If we are being destroyed during/after DLL process detachment
+     // from TerminateProcess, etc, our CS threads are already destroyed
+     // and we cannot synchronize against them.
 diff --git a/src/util/util_env.cpp b/src/util/util_env.cpp
 index c86c3ab..4bec8d7 100644
 --- a/src/util/util_env.cpp

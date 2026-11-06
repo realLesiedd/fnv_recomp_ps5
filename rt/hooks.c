@@ -74,7 +74,7 @@ void h_007CBAF0(Ctx *restrict c) {
     }
   }
   }
-  { extern void resolution_option_install(Ctx *c); resolution_option_install(c); } /* Settings > Display > Resolution */
+  { extern void port_options_install(Ctx *c); port_options_install(c); } /* Settings > Display: Resolution, Frame Rate Cap, Performance Overlay (options.c) */
   o_007CBAF0(c);
 }
 

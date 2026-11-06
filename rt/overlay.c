@@ -108,6 +108,13 @@ typedef struct { const char *path; const unsigned char *data; size_t size; } Emb
 extern const EmbeddedAsset g_assets[];
 extern const int g_nassets;
 
+/* a built-in asset's bytes, or NULL */
+const unsigned char *rt_asset(const char *path, size_t *size) {
+  for (int i = 0; i < g_nassets; i++)
+    if (!strcmp(g_assets[i].path, path)) { if (size) *size = g_assets[i].size; return g_assets[i].data; }
+  return NULL;
+}
+
 static void mkdirs_for(const char *file) {
   char p[2048];
   snprintf(p, sizeof p, "%s", file);

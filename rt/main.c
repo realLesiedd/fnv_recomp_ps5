@@ -23,7 +23,7 @@
 #include <ucontext.h>
 #endif
 
-#define FNV_RELEASE "v25" /* printed at the top of the log so a log shows which build produced it */
+#define FNV_RELEASE "v26" /* printed at the top of the log so a log shows which build produced it */
 
 int g_trace;
 u32 g_peb;
@@ -682,6 +682,7 @@ int main(int argc, char **argv) {
   dispatch_init();
   overlay_init(); /* the app's assets over the game folder */
   { extern void rt_first_run(void); rt_first_run(); }
+  { extern void osd_init(void); osd_init(); } /* overlay and frame cap settings */
   mem_init();
   map_image(exe);
   api_init_all();

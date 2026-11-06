@@ -71,6 +71,14 @@ void hb_stretch(u32 src, u32 srect, u32 dst, u32 drect, u32 filter);
 void hb_colorfill(u32 surf, u32 rect, u32 color);
 void hb_present(void);
 void hb_movie_overlay(void);
+/* performance overlay drawing (hostd3d9.cpp), laid out by osd.c */
+int hb_osd_begin(int *w, int *h);
+void hb_osd_rect(float x, float y, float w, float h, uint32_t argb);
+float hb_osd_text(float x, float y, float size, const char *s, uint32_t argb);
+float hb_osd_text_width(float size, const char *s);
+void hb_osd_end(void);
+int hb_gpu_load(int *compiling);
+int hb_vram_mb(unsigned *used, unsigned *budget);
 void hb_frame_end(double frame_ms, double present_ms, double cpu_ms, int created, int destroyed, double mb_read);
 u32 d3d_storage(Obj *o, int face, u32 level); /* guest storage of a level (made now for a lazy render target) */
 void hb_readback(Obj *src, Obj *dst); /* host render target -> guest storage of dst (or of src when dst is NULL) */
