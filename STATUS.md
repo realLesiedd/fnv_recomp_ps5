@@ -144,6 +144,16 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   - Loading, saving, menus and sound were checked with these changes.
   - Button prompts: the overlay now writes Data\ArchiveInvalidation.txt (the game's own list of archive files to
     take loose), but the save menu still shows the Xbox glyphs. Not solved yet.
+- **v22, PlayStation button prompts (working):** the game draws its controller prompts from 64x64 cells of its UI
+  atlas, textures\interface\interfaceshared0.dds (1024x1024 DXT5, laid out by interfaceshared.tai). It never
+  reads the separate general_button_*.dds files, which is why the loose-file overlay and the archive-read swap
+  could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
+  included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
+  Back circle) and the Pip-Boy (General square).
+  - The Pip-Boy arm (a 3D model texture) still says LT/RT. The game's own PS3 version says L1/R1 (the PS3 put
+    the tabs on the shoulder buttons), which would be wrong for the DualSense, where the tabs are on L2/R2. The arm
+    needs its labels redrawn as L2/R2; not done yet. The platform-name table (0x1189038: PC, XBOX, PS3, PS3O)
+    would switch every controller texture to the PS3 set if ever wanted.
 - **To watch:** stutters in game; frame rate outdoors at the longer draw distances; dust and smoke clouds
   (player video: heavy orange sheets with hard edges, cause not found yet). The old "all threads 100%" figure came from a
   process clock that is not meaningful on PS5; v14 uses getrusage plus per-thread clocks.

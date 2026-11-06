@@ -151,8 +151,10 @@ static u32 level_rows(Obj *o, u32 l) {
   return d3d_is_dxt(o->fmt) ? (h + 3) / 4 : h;
 }
 
+extern "C" void atlas_patch(Obj *o); /* glyphs.c: PlayStation button prompts in the UI atlas */
 static void upload_texture(Obj *o) {
   Prof prof_(T_UPLOAD);
+  if (o->dirty[0] & 1) atlas_patch(o);
   if (o->usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)) { for (int f = 0; f < 6; f++) o->dirty[f] = 0; return; }
   DWORD lockf = (o->usage & D3DUSAGE_DYNAMIC) ? D3DLOCK_DISCARD : 0;
   if (o->kind == K_TEXTURE) {

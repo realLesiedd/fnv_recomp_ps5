@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Draws the PlayStation-style button prompts that replace the game's Xbox 360 ones.
 
-Original drawings (geometric shapes and DejaVu Sans Bold lettering), written as uncompressed 32-bit DDS files with
-the same names, sizes and atlas layout as the game's textures\\interface\\shared\\button\\*.dds. The runtime serves
-them from the app's assets folder as loose files over the game's archives (rt/overlay.c). White on transparent:
-the menus tint them.
+Original drawings (geometric shapes and DejaVu Sans Bold lettering). The game draws its prompts from 64x64 cells of
+its UI atlas (textures\\interface\\interfaceshared0.dds, 1024x1024 DXT5); these are written as DXT5 blocks for those
+cells and their mipmaps, built into the executable (tools/embed_assets.py), and rt/glyphs.c writes them into the
+atlas when the game uploads it. White on transparent: the menus tint them.
 
-Usage: make_glyphs.py OUT_DIR   (writes OUT_DIR/Data/Textures/Interface/Shared/Button/*.dds)
+Usage: make_glyphs.py ASSETS_DIR   (writes ASSETS_DIR/internal/atlas_glyphs/*.dxt5)
 Needs Pillow and DejaVu Sans Bold (fonts-dejavu-core)."""
 import os, struct, sys
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -70,8 +70,8 @@ def trigger(label):
 def stick(label):
     """L3/R3: a stick (ring) with its name"""
     im = canvas(); d = ImageDraw.Draw(im)
-    ring(d, 32, 32, 20, 4)
-    text(d, 32, 33, label, 14)
+    ring(d, 32, 32, 19, 3.5)
+    text(d, 32, 33, label, 13)
     return im
 
 
@@ -110,10 +110,12 @@ GLYPHS = {
 
 def finish(alpha, size, glow):
     """downsample the supersampled alpha; white glyph, optionally over a soft glow (the selected look)"""
-    a = alpha.resize((size, size), Image.LANCZOS)
+    a = alpha.resize((size, size), Image.BOX)
+    # hard edges for the plain glyphs (they show at about 20 pixels and must compress small); the glow keeps soft ones
+    a = a.point(lambda v: 255 if v >= 110 else 0) if not glow else a.point(lambda v: 0 if v < 40 else 255 if v > 215 else v)
     out = Image.new('RGBA', (size, size), (255, 255, 255, 0))
     if glow:
-        g = a.filter(ImageFilter.GaussianBlur(size / 64 * 3.2)).point(lambda v: min(255, int(v * 1.6)))
+        g = a.filter(ImageFilter.GaussianBlur(size / 64 * 2.4)).point(lambda v: min(255, int(v * 0.85)))
         halo = Image.new('RGBA', (size, size), (255, 255, 255, 0))
         halo.putalpha(g)
         out = Image.alpha_composite(out, halo)
@@ -122,37 +124,55 @@ def finish(alpha, size, glow):
     return Image.alpha_composite(out, body)
 
 
-def write_dds(path, im):
+def _alpha_dxt5(block):
+    a0, a1 = max(block), min(block)
+    if a0 == a1:
+        return bytes([a0, a1]) + bytes(6)
+    a0, a1 = 255, 0  # fixed end points for edge blocks: the glyphs are nearly two-level, and this keeps edges crisp
+    pal = [a0, a1] + [((7 - i) * a0 + i * a1) // 7 for i in range(1, 7)]
+    bits = 0
+    for k, v in enumerate(block):
+        idx = min(range(8), key=lambda j: abs(pal[j] - v))
+        bits |= idx << (3 * k)
+    return bytes([a0, a1]) + bits.to_bytes(6, 'little')
+
+
+WHITE = struct.pack('<HHI', 0xFFFF, 0x0000, 0)  # every texel colour 0: white (the menus tint it)
+
+
+def dxt5_blocks(im):
+    """raw DXT5 blocks of an RGBA image (white, alpha from the image), row by row"""
     w, h = im.size
-    hdr = struct.pack('<4sIIIIIII44x', b'DDS ', 124, 0x100F, h, w, w * 4, 0, 0)
-    pf = struct.pack('<II4sIIIII', 32, 0x41, b'\0\0\0\0', 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)
-    caps = struct.pack('<IIIII', 0x1000, 0, 0, 0, 0)
-    r, g, b, a = im.split()
-    data = Image.merge('RGBA', (b, g, r, a)).tobytes()  # BGRA in memory = A8R8G8B8
+    a = im.getchannel('A').load()
+    data = bytearray()
+    for by in range(0, h, 4):
+        for bx in range(0, w, 4):
+            data += _alpha_dxt5([a[bx + x, by + y] for y in range(4) for x in range(4)]) + WHITE
+    return bytes(data)
+
+
+def write_atlas_cell(path, im):
+    """the game draws its prompts from cells of a 1024x1024 DXT5 atlas (InterfaceShared0.dds): our glyph as DXT5
+    blocks for the 64x64 cell and its 32, 16, 8 and 4 mipmap levels, one after another (rt/glyphs.c)"""
+    data = bytearray()
+    for size in (64, 32, 16, 8, 4):
+        level = im if size == 64 else im.resize((size, size), Image.BOX)
+        data += dxt5_blocks(level)
     with open(path, 'wb') as f:
-        f.write(hdr + pf + caps + data)
+        f.write(bytes(data))
 
 
 def main():
-    out = os.path.join(sys.argv[1] if len(sys.argv) > 1 else 'assets', 'Data', 'Textures', 'Interface', 'Shared', 'Button')
-    os.makedirs(out, exist_ok=True)
+    root = sys.argv[1] if len(sys.argv) > 1 else 'assets'
+    cells = os.path.join(root, 'internal', 'atlas_glyphs')
+    os.makedirs(cells, exist_ok=True)
     alpha = {k: fn() for k, fn in GLYPHS.items()}
-    plain = ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'ls', 'rs', 'up']
-    glow = plain + ['start', 'back']
-    for k in plain:
-        write_dds(os.path.join(out, 'general_button_%s.dds' % k), finish(alpha[k], 64, False))
-    for k in glow:
-        write_dds(os.path.join(out, 'glow_general_button_%s.dds' % k), finish(alpha[k], 64, True))
-    # the 256x512 atlas: 4 x 8 cells of 64; glyphs drawn larger (the game's fill their cells)
-    order = [('ls', 0), ('lb', 0), ('a', 0), ('b', 0), ('lt', 0), ('rb', 0), ('rs', 0), ('rt', 0),
-             ('x', 0), ('y', 0), ('a', 1), ('b', 1), ('lb', 1), ('ls', 1), ('lt', 1), ('rb', 1),
-             ('rs', 1), ('rt', 1), ('x', 1), ('y', 1)]
-    atlas = Image.new('RGBA', (256, 512), (255, 255, 255, 0))
-    for i, (k, gl) in enumerate(order):
-        big = alpha[k].resize((64 * SS, 64 * SS)).crop((s(6), s(6), s(58), s(58))).resize((64 * SS, 64 * SS))
-        atlas.paste(finish(big, 64, gl), ((i % 4) * 64, (i // 4) * 64))
-    write_dds(os.path.join(out, 'buttons0.dds'), atlas)
-    print('wrote', len(plain) + len(glow) + 1, 'textures to', out)
+    n = 0
+    for k in ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'ls', 'rs', 'up']:
+        write_atlas_cell(os.path.join(cells, 'general_button_%s.dxt5' % k), finish(alpha[k], 64, False)); n += 1
+    for k in ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'ls', 'rs', 'up', 'start', 'back']:
+        write_atlas_cell(os.path.join(cells, 'glow_general_button_%s.dxt5' % k), finish(alpha[k], 64, True)); n += 1
+    print('wrote', n, 'atlas cells to', cells)
 
 
 if __name__ == '__main__':

@@ -796,6 +796,7 @@ static u32 attrs_of(struct stat *st) { return S_ISDIR(st->st_mode) ? 0x10 : 0x80
 API(k_GetFileAttributesA) {
   char hp[2048]; struct stat st; fs_host_path(STR(ARG(0)), hp, sizeof hp);
   if (stat(hp, &st)) { rt_set_error(c, 2); if (g_trace > 1) rt_log("GetFileAttributes(%s) missing", STR(ARG(0))); RETURN_STD(1, 0xffffffff); }
+  if (g_trace > 1) rt_log("GetFileAttributes(%s) = %x", STR(ARG(0)), attrs_of(&st));
   RETURN_STD(1, attrs_of(&st));
 }
 API(k_GetFullPathNameA) {

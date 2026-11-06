@@ -23,7 +23,7 @@
 #include <ucontext.h>
 #endif
 
-#define FNV_RELEASE "v21" /* printed at the top of the log so a log shows which build produced it */
+#define FNV_RELEASE "v22" /* printed at the top of the log so a log shows which build produced it */
 
 int g_trace;
 u32 g_peb;
@@ -680,7 +680,7 @@ int main(int argc, char **argv) {
 
   rt_heartbeat_start();
   dispatch_init();
-  overlay_init(); /* the app's assets over the game folder (button prompts) */
+  overlay_init(); /* the app's assets over the game folder */
   { extern void rt_first_run(void); rt_first_run(); }
   mem_init();
   map_image(exe);

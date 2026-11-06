@@ -5,8 +5,8 @@
  * it opens an archive it walks Data with FindFirstFileA and compares dates (DirectoryArchive, 0xB01590 in the
  * decomp). Overlay files are reported with the time the app started, so they always count as newer.
  *
- * The first overlay is the app's own assets folder (the PlayStation button prompts drawn by tools/make_glyphs.py);
- * a mods folder can be another. Paths are matched without regard to case. */
+ * The first overlay is the app's own assets folder (files built into the executable, tools/embed_assets.py); a mods
+ * folder can be another. Paths are matched without regard to case. */
 #define _GNU_SOURCE
 #include "rt.h"
 #include <ctype.h>
@@ -119,6 +119,7 @@ static void mkdirs_for(const char *file) {
 static void extract_assets(const char *dir) {
   int written = 0;
   for (int i = 0; i < g_nassets; i++) {
+    if (!strncmp(g_assets[i].path, "internal/", 9)) continue; /* used from memory (glyphs.c), not as files */
     char path[2048];
     snprintf(path, sizeof path, "%s/%s", dir, g_assets[i].path);
     FILE *f = fopen(path, "rb");
@@ -182,12 +183,33 @@ static void write_invalidation(const char *root) {
   fclose(out);
 }
 
+/* files in the assets folder that this build does not ship (left by an older version) are removed */
+static void prune(const char *root, const char *host, const char *rel) {
+  DIR *d = opendir(host);
+  if (!d) return;
+  struct dirent *de;
+  while ((de = readdir(d))) {
+    if (de->d_name[0] == '.') continue;
+    char h[2048], r[2048];
+    snprintf(h, sizeof h, "%s/%s", host, de->d_name);
+    snprintf(r, sizeof r, "%s%s%s", rel, rel[0] ? "/" : "", de->d_name);
+    struct stat st;
+    if (stat(h, &st)) continue;
+    if (S_ISDIR(st.st_mode)) { prune(root, h, r); rmdir(h); continue; } /* rmdir only succeeds when empty */
+    int keep = 0;
+    for (int i = 0; i < g_nassets && !keep; i++) keep = !strcmp(g_assets[i].path, r);
+    if (!keep && unlink(h) == 0) rt_log("overlay: removed %s (not in this build)", r);
+  }
+  closedir(d);
+}
+
 void overlay_init(void) {
   g_ov_time = time(NULL);
   const char *dir = getenv("FNV_ASSETS_DIR"); /* a folder to use instead of the built-in assets (testing) */
   char buf[1100];
   if (!dir && g_nassets) {
     snprintf(buf, sizeof buf, "%s/assets", g_user_dir);
+    prune(buf, buf, "");
     extract_assets(buf);
     dir = buf;
   }

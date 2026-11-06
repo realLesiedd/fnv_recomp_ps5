@@ -188,6 +188,7 @@ int fs_game_rel(const char *w, char *rel, size_t n) {
 int fs_host_path(const char *w, char *out, size_t n) {
   char buf[2048], rel[2048];
   host_path(w, buf, sizeof buf);
+  if (getenv("FNV_PATH_DEBUG") && rt_strcasestr(w, getenv("FNV_PATH_DEBUG"))) rt_log("path: %s", w);
   /* an overlay file wins; an overlay folder is used when the game has none by that name (listings merge both) */
   if (overlay_active() && game_rel(buf, rel, sizeof rel)) {
     int dir = 0;
