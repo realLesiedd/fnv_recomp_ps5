@@ -96,7 +96,7 @@ static int pad_script(PlatPad *p, u32 *packet) {
       /* walk / turn: hold the left stick forward / the right stick right for 3 s (no button) */
       u16 b = !strncmp(e, "down", 4) ? 0x2 : !strncmp(e, "up", 2) ? 0x1 : !strncmp(e, "walk", 4) ? 0xA001 :
               !strncmp(e, "turn", 4) ? 0xA002 : !strncmp(e, "a", 1) ? 0x1000 : !strncmp(e, "b", 1) ? 0x2000 :
-              !strncmp(e, "start", 5) ? 0x10 : 0;
+              !strncmp(e, "start", 5) ? 0x10 : !strncmp(e, "right", 5) ? 0x8 : !strncmp(e, "left", 4) ? 0x4 : 0;
       ev[n].t = t; ev[n].b = b; n++;
       while (*e && *e != ',') e++; if (*e == ',') e++;
     }

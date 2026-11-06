@@ -75,7 +75,7 @@ API(u_AdjustWindowRect) { RETURN_STD(3, 1); }
 API(u_AdjustWindowRectEx) { RETURN_STD(4, 1); }
 API(u_GetSystemMetrics) {
   u32 i = ARG(0);
-  u32 v = i == 0 ? 1280 : i == 1 ? 720 : i == 43 ? 3 : i == 80 ? 1 : 0;
+  u32 v = i == 0 ? 3840 : i == 1 ? 2160 : i == 43 ? 3 : i == 80 ? 1 : 0; /* the screen: a 4K TV */
   RETURN_STD(1, v);
 }
 #include "platform.h"

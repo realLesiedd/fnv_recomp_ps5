@@ -636,7 +636,8 @@ extern "C" void hb_readback(Obj *src, Obj *dst) {
       u32 rows = d3d_is_dxt(dst->fmt) ? (dst->h + 3) / 4 : dst->h;
       if (rows > desc.Height) rows = desc.Height;
       u32 n = (u32)lr.Pitch < dst->pitch[0] ? (u32)lr.Pitch : dst->pitch[0];
-      for (u32 y = 0; y < rows; y++) memcpy(HP(dst->data[0][0] + y * dst->pitch[0]), (char *)lr.pBits + (size_t)y * lr.Pitch, n);
+      u32 base = d3d_storage(dst, 0, 0);
+      for (u32 y = 0; y < rows; y++) memcpy(HP(base + y * dst->pitch[0]), (char *)lr.pBits + (size_t)y * lr.Pitch, n);
       sys->UnlockRect();
     }
   }

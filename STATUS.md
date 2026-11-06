@@ -150,6 +150,19 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v25, 4K and a Resolution option:** the game renders at iSize W x iSize H from FalloutPrefs.ini (read once at
+  start-up); the PS5's TV output was already 4K (DXVK's PS5 display code picks the TV's 3840x2160 mode) with the
+  game's 1280x720 image scaled up to it. Now:
+  - 3840x2160 by default: set once by the settings upgrade (SETTINGS_VERSION 3, firstrun.c), and on a first run.
+  - Settings > Display > Resolution (rt/resolution.c), next to Texture Size: 1280x720, 1920x1080, 2560x1440,
+    3840x2160. Built like the game's own options (UserOption 0x30 bytes, constructor 0x7D6350, added to the options
+    array 0x11DAB50 from the start menu's init hook); its callback sets the iSize settings (0x11C73DC, 0x11C718C),
+    which the game saves, and raises the start menu's restart-required flag. Takes effect at the next start.
+  - The game is told the screen is 3840x2160 (GetSystemMetrics, the adapter's display mode, two more modes).
+  - GPU render targets and depth buffers no longer get a copy in game memory until the game locks one or reads it
+    back (d3d_storage in d3d9.c): at 4K a screen-sized target is 33-66 MB of the game's 2 GB address space, and on
+    the PS5 of real memory. Checked: 4K main menu and Goodsprings, a save and its thumbnail, screenshots.
+  - The prompt size from v25's first half: iButtonPromptSize in [fnv_recomp] (50, 60, 70, 80, 100; 60 by default).
 - **v24, smaller prompts:** the first drawings put the face symbols inside a ring about 42 px across, against the
   game's own letters at about 23x34 in the same 64 px cells, so they looked far too big. Face buttons are now the
   bare symbols (as on the PS3), and every glyph is drawn at 80% about the cell centre (SCALE in make_glyphs.py).

@@ -56,7 +56,25 @@ void h_007CBAF0(Ctx *restrict c) {
           }
         rt_log("  option %u: callback %08x flags %08x %s", i, M32(opt + 8), M32(opt + 12), txt);
       }
+  if (getenv("FNV_DUMP_MENU")) { /* the Settings options (StartMenu::UserOption, 0x30 bytes) */
+    u32 data = M32(0x11DAB50u + 4), n = M32(0x11DAB50u + 8);
+    for (u32 i = 0; i < n && i < 128; i++) {
+      u32 o = M32(data + 4 * i);
+      const char *name = M32(o + 4) ? (const char *)HP(M32(o + 4)) : "";
+      char vals[160] = "";
+      if (M32(o + 0x28) && M32(o + 0x1C) < 2)
+        for (u32 k = 0; k < M32(o + 0x20) && k < 6; k++) {
+          u32 v = M32(M32(o + 0x28) + 4 * k);
+          size_t l = strlen(vals);
+          snprintf(vals + l, sizeof vals - l, "%s%s", k ? "|" : "", v ? (const char *)HP(v) : "?");
+        }
+      rt_log("  user option %u at %08x: vt %08x \"%s\" modes %08x tmpl \"%s\" val %d def %d type %d count %u f24 %u "
+             "values [%s] change %08x", i, o, M32(o), name, M32(o + 0xC), M32(o + 0x10) ? (const char *)HP(M32(o + 0x10)) : "",
+             (int)M32(o + 0x14), (int)M32(o + 0x18), (int)M32(o + 0x1C), M32(o + 0x20), M32(o + 0x24), vals, M32(o + 0x2C));
+    }
   }
+  }
+  { extern void resolution_option_install(Ctx *c); resolution_option_install(c); } /* Settings > Display > Resolution */
   o_007CBAF0(c);
 }
 

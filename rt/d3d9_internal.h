@@ -23,6 +23,7 @@ typedef struct Obj {
   u32 dirty[6];          /* GPU backend: levels to upload, one bit per level and face */
   u32 dirty_lo, dirty_hi;/* GPU backend: buffer byte range to upload */
   int discard;           /* GPU backend: the game locked with D3DLOCK_DISCARD since the last upload */
+  int lazy;              /* GPU render target or depth buffer: guest storage made only when needed (d3d_storage) */
 } Obj;
 
 typedef struct {
@@ -71,6 +72,7 @@ void hb_colorfill(u32 surf, u32 rect, u32 color);
 void hb_present(void);
 void hb_movie_overlay(void);
 void hb_frame_end(double frame_ms, double present_ms, double cpu_ms, int created, int destroyed, double mb_read);
+u32 d3d_storage(Obj *o, int face, u32 level); /* guest storage of a level (made now for a lazy render target) */
 void hb_readback(Obj *src, Obj *dst); /* host render target -> guest storage of dst (or of src when dst is NULL) */
 void hb_release(Obj *o);
 

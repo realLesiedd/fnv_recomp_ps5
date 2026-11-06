@@ -218,6 +218,11 @@ static void dump_draw(const char *what, u32 type, u32 count);
 static u32 g_vt_surface, g_vt_texture, g_vt_cube, g_vt_volume, g_vt_vb, g_vt_ib, g_vt_vs, g_vt_ps, g_vt_decl, g_vt_query,
     g_vt_sb, g_vt_swap;
 
+/* With the GPU backend, render targets and depth buffers live on the GPU; the game's copy of their pixels is only
+   needed when it locks one or reads one back, so their guest storage is made then (d3d_storage). At 4K a
+   screen-sized target is 33-66 MB of the game's 2 GB address space, and on the PS5 of real memory. */
+static int lazy_ok(u32 usage, u32 pool) { return hb_active() && (usage & 3) && pool == 0; }
+
 static u32 make_surface(u32 w, u32 h, u32 fmt, u32 usage, u32 pool, u32 parent, u32 storage, u32 pitch) {
   Obj *o;
   u32 g = new_obj(g_vt_surface, K_SURFACE, &o);
@@ -225,10 +230,30 @@ static u32 make_surface(u32 w, u32 h, u32 fmt, u32 usage, u32 pool, u32 parent, 
   if (storage) { o->data[0][0] = storage; o->pitch[0] = pitch; }
   else {
     u32 sz; level_layout(fmt, w, h, &o->pitch[0], &sz);
-    o->data[0][0] = heap_alloc(sz ? sz : 4, 1);
     o->size = sz;
+    if (lazy_ok(usage, pool) || (parent && obj(parent) && obj(parent)->lazy)) o->lazy = 1;
+    else o->data[0][0] = heap_alloc(sz ? sz : 4, 1);
   }
   return g;
+}
+
+static u32 lvl_w(Obj *o, u32 l);
+static u32 lvl_h(Obj *o, u32 l);
+u32 d3d_storage(Obj *o, int face, u32 l) {
+  if (!o) return 0;
+  if (o->kind == K_SURFACE) {
+    if (!o->data[0][0] && o->lazy) {
+      Obj *p = o->parent ? obj(o->parent) : NULL;
+      if (p) o->data[0][0] = d3d_storage(p, o->face, o->level); /* a level of its texture */
+      else o->data[0][0] = heap_alloc(o->size ? o->size : 4, 1);
+    }
+    return o->data[0][0];
+  }
+  if (!o->data[face][l] && o->lazy) {
+    u32 pitch, sz; level_layout(o->fmt, lvl_w(o, l), lvl_h(o, l), &pitch, &sz);
+    o->data[face][l] = heap_alloc(sz ? sz : 4, 1);
+  }
+  return o->data[face][l];
 }
 
 static void fill_surface_desc(u32 p, Obj *o, u32 w, u32 h) {
@@ -244,7 +269,7 @@ API(s_LockRect) {
     u32 x = M32(rc), y = M32(rc + 4);
     off = is_dxt(o->fmt) ? (y / 4) * o->pitch[0] + (x / 4) * block_bytes(o->fmt) : y * o->pitch[0] + x * bpp(o->fmt);
   }
-  M32(lr) = o->pitch[0]; M32(lr + 4) = o->data[0][0] + off;
+  M32(lr) = o->pitch[0]; M32(lr + 4) = d3d_storage(o, 0, 0) + off;
   RETURN_STD(4, S_OK);
 }
 API(s_UnlockRect) { RETURN_STD(1, S_OK); }
@@ -279,13 +304,14 @@ static u32 make_texture(int kind, u32 w, u32 h, u32 d, u32 levels, u32 usage, u3
   if (!levels) levels = (usage & 0x400) ? 1 : mip_count(w, h); /* AUTOGENMIPMAP keeps one level visible */
   if (levels > MAXLVL) levels = MAXLVL;
   o->w = w; o->h = h; o->d = d; o->levels = levels; o->usage = usage; o->fmt = fmt; o->pool = pool;
+  o->lazy = kind != K_VOLUME && lazy_ok(usage, pool);
   int faces = kind == K_CUBE ? 6 : 1;
   for (int f = 0; f < faces; f++) {
     u32 lw = w, lh = h, ld = d ? d : 1;
     for (u32 l = 0; l < levels; l++) {
       u32 pitch, sz; level_layout(fmt, lw, lh, &pitch, &sz);
       o->pitch[l] = pitch;
-      o->data[f][l] = heap_alloc((sz * ld) ? sz * ld : 4, 0);
+      if (!o->lazy) o->data[f][l] = heap_alloc((sz * ld) ? sz * ld : 4, 0);
       o->dirty[f] |= 1u << l;
       lw = lw > 1 ? lw / 2 : 1; lh = lh > 1 ? lh / 2 : 1; ld = ld > 1 ? ld / 2 : 1;
     }
@@ -309,7 +335,7 @@ static void lock_level(Obj *o, int face, u32 l, u32 lr, u32 rc) {
     u32 x = M32(rc), y = M32(rc + 4);
     off = is_dxt(o->fmt) ? (y / 4) * o->pitch[l] + (x / 4) * block_bytes(o->fmt) : y * o->pitch[l] + x * bpp(o->fmt);
   }
-  M32(lr) = o->pitch[l]; M32(lr + 4) = o->data[face][l] + off;
+  M32(lr) = o->pitch[l]; M32(lr + 4) = d3d_storage(o, face, l) + off;
 }
 API(t_GetLevelCount) { RETURN_STD(1, obj(COM_THIS)->levels); }
 API(t_GetLOD) { RETURN_STD(1, 0); }
@@ -565,7 +591,8 @@ static void copy_surface(u32 src, u32 dst) {
   Obj *s = obj(src), *d = obj(dst);
   if (!s || !d || s->fmt != d->fmt || s->w != d->w || s->h != d->h) return;
   u32 rows = is_dxt(s->fmt) ? (s->h + 3) / 4 : s->h;
-  for (u32 y = 0; y < rows; y++) memcpy(HP(d->data[0][0] + y * d->pitch[0]), HP(s->data[0][0] + y * s->pitch[0]), s->pitch[0] < d->pitch[0] ? s->pitch[0] : d->pitch[0]);
+  u32 sd = d3d_storage(s, 0, 0), dd = d3d_storage(d, 0, 0);
+  for (u32 y = 0; y < rows; y++) memcpy(HP(dd + y * d->pitch[0]), HP(sd + y * s->pitch[0]), s->pitch[0] < d->pitch[0] ? s->pitch[0] : d->pitch[0]);
 }
 API(d_UpdateSurface) { invalidate_cache(obj(ARG(3))); copy_surface(ARG(1), ARG(3)); RETURN_STD(5, S_OK); }
 API(d_UpdateTexture) {
@@ -575,7 +602,7 @@ API(d_UpdateTexture) {
     for (int f = 0; f < faces; f++)
       for (u32 l = 0; l < s->levels && l < d->levels; l++) {
         u32 p, sz; level_layout(s->fmt, lvl_w(s, l), lvl_h(s, l), &p, &sz);
-        memcpy(HP(d->data[f][l]), HP(s->data[f][l]), sz);
+        memcpy(HP(d3d_storage(d, f, l)), HP(d3d_storage(s, f, l)), sz);
       }
   }
   RETURN_STD(3, S_OK);
@@ -783,8 +810,9 @@ static const ComMethod swap_methods[] = {
 };
 
 /* ---- IDirect3D9 ------------------------------------------------------------ */
-static const u32 g_modes[][2] = {{800, 600}, {1024, 768}, {1280, 720}, {1280, 1024}, {1600, 900}, {1920, 1080}};
-#define NMODES 6
+static const u32 g_modes[][2] = {{800, 600}, {1024, 768}, {1280, 720}, {1280, 1024}, {1600, 900}, {1920, 1080},
+                                 {2560, 1440}, {3840, 2160}};
+#define NMODES 8
 API(i_GetAdapterCount) { RETURN_STD(1, 1); }
 API(i_GetAdapterIdentifier) {
   u32 p = ARG(3);
@@ -805,7 +833,7 @@ API(i_EnumAdapterModes) {
   M32(p) = g_modes[m][0]; M32(p + 4) = g_modes[m][1]; M32(p + 8) = 60; M32(p + 12) = ARG(2);
   RETURN_STD(5, S_OK);
 }
-API(i_GetAdapterDisplayMode) { u32 p = ARG(2); M32(p) = 1920; M32(p + 4) = 1080; M32(p + 8) = 60; M32(p + 12) = 22; RETURN_STD(3, S_OK); }
+API(i_GetAdapterDisplayMode) { u32 p = ARG(2); M32(p) = 3840; M32(p + 4) = 2160; M32(p + 8) = 60; M32(p + 12) = 22; RETURN_STD(3, S_OK); }
 API(i_CheckDeviceType) { RETURN_STD(6, S_OK); }
 static int format_supported(u32 f) {
   switch (f) {
@@ -858,6 +886,11 @@ API(i_CreateDevice) {
   g_swap = new_obj(g_vt_swap, K_SWAP, NULL);
   M32(ARG(6)) = g_device;
   hb_create_device(); /* GPU backend, when available */
+  if (hb_active()) /* the first back and depth buffers were made before the backend was up: nothing in them yet */
+    for (u32 *b = &D->backbuffer; b; b = b == &D->backbuffer ? &D->depth : NULL) {
+      Obj *o = *b ? obj(*b) : NULL;
+      if (o && o->data[0][0]) { heap_free(o->data[0][0]); o->data[0][0] = 0; o->lazy = 1; }
+    }
   rt_log("D3D9: CreateDevice %ux%u fmt=%u depth=%u windowed=%u behavior=%x -> %08x", D->pp[0], D->pp[1], D->pp[2],
          D->pp[10], D->pp[8], D->behavior, g_device);
   RETURN_STD(7, S_OK);
@@ -881,7 +914,7 @@ static void be_platform_present(void) {
   if (hb_active()) { hb_present(); return; }
   if (!g_render_on || !D) return;
   Obj *bb = obj(D->backbuffer);
-  if (bb && (bb->fmt == 21 || bb->fmt == 22)) plat_present((const uint32_t *)HP(bb->data[0][0]), bb->w, bb->h, bb->pitch[0]);
+  if (bb && bb->data[0][0] && (bb->fmt == 21 || bb->fmt == 22)) plat_present((const uint32_t *)HP(bb->data[0][0]), bb->w, bb->h, bb->pitch[0]);
 }
 static void be_present_shot(void) {
   static int init;

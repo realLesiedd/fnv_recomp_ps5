@@ -73,11 +73,13 @@ static char *apply_preset(char *b, const char *src) {
    tree, terrain and grass distances, high shadows and water) without its multisampling, which this port does not
    render. Applied to an existing FalloutPrefs.ini once per SETTINGS_VERSION, so changes made later in the game's
    settings menu stay. */
-#define SETTINGS_VERSION "2"
+#define SETTINGS_VERSION "3" /* 3: 4K, chosen once; Settings > Display > Resolution changes it (resolution.c) */
 static char *quality(char *b, const char *game_dir) {
   char src[1200];
   snprintf(src, sizeof src, "%s/VeryHigh.ini", game_dir);
   b = apply_preset(b, src);
+  b = ini_set(b, "Display", "iSize W", "3840");
+  b = ini_set(b, "Display", "iSize H", "2160");
   b = ini_set(b, "Display", "iMultiSample", "1");
   b = ini_set(b, "Display", "iWaterMultisamples", "1");
   b = ini_set(b, "Display", "bTransparencyMultisampling", "0");
@@ -111,6 +113,17 @@ int rt_setting_int(const char *key, int def) {
   }
   free(b);
   return v;
+}
+
+/* set key=value in [sect] of FalloutPrefs.ini */
+void rt_prefs_set(const char *sect, const char *key, const char *val) {
+  char path[1200]; long n;
+  prefs_path(path, sizeof path);
+  char *b = slurp(path, &n);
+  if (!b) return;
+  b = ini_set(b, sect, key, val);
+  FILE *f = fopen(path, "wb"); if (f) { fputs(b, f); fclose(f); }
+  free(b);
 }
 
 static void own_settings(void) {
@@ -147,8 +160,10 @@ void rt_first_run(void) {
     if (!b) b = strdup("[Display]\r\n");
     if (!getenv("FNV_PRESET")) b = quality(b, g_game_dir);
     b = ini_set(b, "Display", "sD3DDevice", "\"NVIDIA GeForce 8800 GT (fnv_recomp)\"");
-    b = ini_set(b, "Display", "iSize W", "1280");
-    b = ini_set(b, "Display", "iSize H", "720");
+    if (getenv("FNV_PRESET")) { /* tests: the old 720p */
+      b = ini_set(b, "Display", "iSize W", "1280");
+      b = ini_set(b, "Display", "iSize H", "720");
+    }
     b = ini_set(b, "Display", "bFull Screen", "0");
     FILE *f = fopen(prefs, "wb"); if (f) { fputs(b, f); fclose(f); }
     free(b);
@@ -159,7 +174,7 @@ void rt_first_run(void) {
     if (b && (!m || strncmp(m + 17, SETTINGS_VERSION, strlen(SETTINGS_VERSION)) != 0)) {
       b = quality(b, g_game_dir);
       FILE *f = fopen(prefs, "wb"); if (f) { fputs(b, f); fclose(f); }
-      rt_log("settings: FalloutPrefs.ini raised to the VeryHigh preset (textures, filtering, draw distances)");
+      rt_log("settings: FalloutPrefs.ini raised to the VeryHigh preset (textures, filtering, draw distances) at 3840x2160");
     }
     free(b);
   }
