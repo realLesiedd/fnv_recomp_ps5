@@ -29,26 +29,19 @@
 #include <sys/resource.h>
 #ifdef __PROSPERO__
 #include <ps5platform/kernel.h>
-/* temperatures: looked up at run time, so a system without them only loses the readings */
-int sysctlbyname(const char *name, void *old, size_t *oldlen, const void *new_, size_t newlen);
-int sceKernelLoadStartModule(const char *, size_t, const void *, unsigned, void *, int *);
-int sceKernelDlsym(int, const char *, void **);
-static int (*p_cpu_temp)(int *), (*p_soc_temp)(int, int *);
+/* temperatures: imported directly (v26-v28 looked them up at run time, which fails on the console, as it did for
+   the pad's trigger functions); a call that is refused just leaves the reading out */
+int sceKernelGetCpuTemperature(int *temp);
+int sceKernelGetSocSensorTemperature(int sensor, int *temp);
+static int (*p_cpu_temp)(int *) = sceKernelGetCpuTemperature;
+static int (*p_soc_temp)(int, int *) = sceKernelGetSocSensorTemperature;
 static void temp_init(void) {
   static int done;
   if (done) return;
   done = 1;
-  int handles[4] = {0x2001, -1, -1, -1}; /* 0x2001: libkernel, already loaded in every process */
-  static const char *mods[] = {"libkernel_sys.sprx", "libkernel.sprx", "/system/common/lib/libkernel_sys.sprx"};
-  for (int i = 0; i < 3; i++) handles[1 + i] = sceKernelLoadStartModule(mods[i], 0, 0, 0, 0, 0);
-  for (int i = 0; i < 4 && (!p_cpu_temp || !p_soc_temp); i++) {
-    void *f = 0;
-    if (handles[i] < 0) continue;
-    if (!p_cpu_temp && !sceKernelDlsym(handles[i], "sceKernelGetCpuTemperature", &f) && f) p_cpu_temp = (int (*)(int *))f;
-    f = 0;
-    if (!p_soc_temp && !sceKernelDlsym(handles[i], "sceKernelGetSocSensorTemperature", &f) && f) p_soc_temp = (int (*)(int, int *))f;
-  }
-  rt_log("overlay: temperatures %s", p_cpu_temp || p_soc_temp ? "available" : "not available");
+  int c = 0, s = 0, rc = p_cpu_temp(&c), rs = p_soc_temp(0, &s);
+  rt_log("overlay: CPU temperature %s (0x%x, %d), SoC temperature %s (0x%x, %d)", rc ? "refused" : "read", (unsigned)rc, c,
+         rs ? "refused" : "read", (unsigned)rs, s);
 }
 #endif
 

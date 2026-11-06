@@ -14,7 +14,8 @@ and our own drawings.
 The face buttons keep the game's arc and get the PlayStation symbol in place of the letter. The shoulders, triggers,
 sticks and Start/Back are drawn whole, the way PS3-style icon sets for these games draw them (as the PS3 version
 did): thin outlines at the game's line weight - a flat rectangle for L1/R1, a taller rounded box for L2/R2, a stick
-with its letter in the cap for L3/R3, the button's name in a rectangle for Options and Create.
+with its letter in the cap for L3/R3, OPTIONS in a rectangle for Start, the touchpad for Back (the PS5 keeps the Create
+button for itself; the port maps the touchpad click to Back).
 
 Each cell file (internal/ps3_cells/<name>.cell): u8 flags (1: a highlighted, glowing cell; 2: replace the whole cell,
 not just its letters), then the body coverage (64x64 bytes) and, for highlighted cells, the glow coverage.
@@ -49,7 +50,8 @@ BOXES = {
 ARC = {'general_button_a': 37, 'general_button_b': 36, 'general_button_x': 37, 'general_button_y': 37,
        'glow_general_button_a': 36, 'glow_general_button_b': 36, 'glow_general_button_x': 35, 'glow_general_button_y': 35}
 KIND = {'a': 'cross', 'b': 'circle', 'x': 'square', 'y': 'triangle', 'lb': 'L1', 'rb': 'R1', 'lt': 'L2', 'rt': 'R2',
-        'ls': 'L3', 'rs': 'R3', 'start': 'options', 'back': 'create'}
+        'ls': 'L3', 'rs': 'R3', 'start': 'options', 'back': 'touchpad'}  # Back is the touchpad click (the PS5
+        # keeps Create for itself; rt/platform_sdl.c maps the touchpad to Back)
 
 
 def S(v):
@@ -137,9 +139,12 @@ def draw_whole(kind):
     elif kind in ('L3', 'R3'):  # a stick: a wide cap on a stem, its letter in the cap
         im = outline([(12, 17, 52, 35, 8), (25, 31, 39, 46, 2)], LW)
         t, at = text_in(None, kind[0], 32, 26, 10, 12)
-    else:  # Options, Create: the name in a rectangle
+    elif kind == 'touchpad':  # the pad: wide, a flat top, rounded at the bottom, its name inside
+        im = outline([(6, 19, 58, 33, 2), (6, 23, 58, 44, 9)], LW)
+        t, at = text_in(None, 'TOUCHPAD', 32, cy + 0.5, 7.5, 40)
+    else:  # Options: the name in a rectangle
         im = outline([(7, 21.5, 57, 41.5, 3)], LW)
-        t, at = text_in(None, 'OPTIONS' if kind == 'options' else 'CREATE', 32, cy, 8, 36 if kind == 'options' else 33)
+        t, at = text_in(None, 'OPTIONS', 32, cy, 8, 36)
     im.paste(255, at, t)
     return im.resize((64, 64), Image.BOX)
 
