@@ -346,6 +346,15 @@ API(b_Play) {
     if (b->pos >= b->frames) b->pos = 0;
     b->playing = 1;
     b->looping = ARG(3) & DSBPLAY_LOOPING;
+    static int dbg = -1;
+    if (dbg < 0) dbg = getenv("FNV_AUDIO_DEBUG") && atoi(getenv("FNV_AUDIO_DEBUG")) >= 2;
+    if (dbg && !b->looping) { /* every one-shot sound: where it is (3D ones), and how loud */
+      float gl, gr;
+      gains(b, &gl, &gr);
+      rt_log("audio: play buf %d %u bytes vol %d mode %u p(%.0f,%.0f,%.0f) listener(%.0f,%.0f,%.0f) min %.0f max %.0f "
+             "flags %x gain %.3f/%.3f", (int)(b - g_buf), b->data ? b->data->bytes : 0, b->volume, b->mode, b->p[0], b->p[1],
+             b->p[2], g_lis.p[0], g_lis.p[1], g_lis.p[2], b->mind, b->maxd, b->flags, gl, gr);
+    }
   }
   pthread_mutex_unlock(&g_mx);
   RETURN_STD(4, b ? DS_OK : DSERR_INVALIDCALL);

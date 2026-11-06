@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <math.h>
 
 #define API(n) static void n(Ctx *c)
 
@@ -94,9 +95,11 @@ static int pad_script(PlatPad *p, u32 *packet) {
     for (; e && *e && n < 96;) {
       double t = strtod(e, (char **)&e); if (*e == ':') e++;
       /* walk / turn: hold the left stick forward / the right stick right for 3 s (no button) */
-      u16 b = !strncmp(e, "down", 4) ? 0x2 : !strncmp(e, "up", 2) ? 0x1 : !strncmp(e, "walk", 4) ? 0xA001 :
+      /* menua: for 40 s, tap cross every 1.5 s while a menu is open (clears message boxes, never acts in play) */
+      u16 b = !strncmp(e, "menua", 5) ? 0xA004 : !strncmp(e, "down", 4) ? 0x2 : !strncmp(e, "up", 2) ? 0x1 : !strncmp(e, "walk", 4) ? 0xA001 :
               !strncmp(e, "turn", 4) ? 0xA002 : !strncmp(e, "fire", 4) ? 0xA003 : !strncmp(e, "a", 1) ? 0x1000 : !strncmp(e, "b", 1) ? 0x2000 :
-              !strncmp(e, "start", 5) ? 0x10 : !strncmp(e, "right", 5) ? 0x8 : !strncmp(e, "left", 4) ? 0x4 : 0;
+              !strncmp(e, "start", 5) ? 0x10 : !strncmp(e, "right", 5) ? 0x8 : !strncmp(e, "left", 4) ? 0x4 :
+              !strncmp(e, "r3", 2) ? 0x80 : 0;
       ev[n].t = t; ev[n].b = b; n++;
       while (*e && *e != ',') e++; if (*e == ',') e++;
     }
@@ -110,6 +113,10 @@ static int pad_script(PlatPad *p, u32 *packet) {
     if (ev[i].b == 0xA001 && now >= ev[i].t && now < ev[i].t + 3) p->ly = 32767;
     if (ev[i].b == 0xA002 && now >= ev[i].t && now < ev[i].t + 3) p->rx = 32767;
     if (ev[i].b == 0xA003 && now >= ev[i].t && now < ev[i].t + 0.3) p->rt = 255;
+    if (ev[i].b == 0xA004 && now >= ev[i].t && now < ev[i].t + 40 && fmod(now - ev[i].t, 1.5) < 0.3) {
+      u32 im = M32(0x11D8A80); /* InterfaceManager; +0xC == 1 outside menu mode */
+      if (im && M32(im + 0xC) != 1) p->buttons |= 0x1000;
+    }
     if (ev[i].b < 0xA000 && now >= ev[i].t && (now < ev[i].t + 0.25 || ev[i].polls < 4)) { /* seen by 4 reads at least */
       ev[i].polls++;
       p->buttons |= ev[i].b;
