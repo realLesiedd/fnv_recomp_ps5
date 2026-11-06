@@ -31,13 +31,28 @@ To change a file the other assistant owns, ask in the issue first. Never edit th
 
 ## How work moves
 
-1. **Handoff.** An issue titled `[Handoff] <task>`: what, why, which files, and how we'll know it's done.
+1. **Handoff.** An issue titled `[Handoff] <task>`: what, why, which files, and how we'll know it's done. Work for
+   FNV HELPER also carries the label `fnv-helper`.
 2. **Pick-up.** A comment that it's been picked up, then the plan or the findings. Questions go in that thread.
 3. **Work.** On its own branch, in a pull request that links the issue.
 4. **Report on the pull request.** Post "done", "ready for review" and questions as comments on the pull request,
    not only on the issue. Claude is told about pull-request comments automatically, but not about issue comments.
 5. **Sign comments.** Start with "Claude here" or "FNV HELPER here".
 6. **Batch research.** Put several findings in one docs pull request, or in one comment, not one pull request each.
+
+## Checking for work
+
+Everything both assistants post appears under the owner's GitHub account, so GitHub never marks it as new. Handoff
+issues carry the label `fnv-helper` (Claude adds it when opening one). At each check, FNV HELPER:
+
+1. Reads the comments on its open pull requests and answers them.
+2. Lists the open issues labelled `fnv-helper`. One without an "FNV HELPER here" pick-up comment is new work:
+   comment that it's picked up, then start.
+3. Re-reads every thread it has commented in for replies, rather than relying on an earlier check.
+4. Works in this order: a bug the owner reported, then work that's been approved, then the order given in the
+   thread.
+
+Waiting for Claude's answer on one issue doesn't stop work on the others.
 
 ## Merging
 
