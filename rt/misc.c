@@ -116,16 +116,62 @@ static int pad_script(PlatPad *p, u32 *packet) {
       if (ev[i].b == 0x1) p->ly = 32000;
     }
   }
-  *packet = (u32)(now * 10);
+  if (getenv("FNV_PADSCRIPT_EVENTS")) { /* like a real pad: the packet number changes only when the state does */
+    static PlatPad last; static u32 pk;
+    if (memcmp(&last, p, sizeof last)) { pk++; last = *p; }
+    *packet = pk;
+  } else *packet = (u32)(now * 10);
   return 1;
 }
 u64 g_stat_pad;
+/* The start menu (main and pause menu, with its own Yes/No prompts) drops a ✕ or ○ that comes within
+   500 ms of its last action: its click handler (0x7CE9B0) and back handler (0x7CF5E0) compare
+   GetTickCount with the time of the last action (0x11DAAB4). So ✕ pressed soon after backing out with ○,
+   or Yes pressed soon after Continue, did nothing and had to be pressed again. The game's own pause
+   stays as it is; a press that would be dropped is held back and given to the game once the menu
+   takes input again. */
+static int start_menu_waiting(void) {
+  u32 sm = M32(0x11DAAC0), im = M32(0x11D8A80);
+  if (!sm || !im || M32(im + 0xC) == 1) return 0; /* no start menu, or the game is not in menu mode */
+  struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+  u32 now = (u32)(((u64)t.tv_sec * 1000000000ull + (u64)t.tv_nsec) / 1000000); /* the game's GetTickCount */
+  return now - M32(0x11DAAB4) <= 520;
+}
+static void menu_press_hold(PlatPad *p) {
+  static u16 prev, held, sent; static double since; static int sent_polls;
+  struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+  double now = t.tv_sec + t.tv_nsec / 1e9;
+  u16 down = p->buttons & ~prev;
+  prev = p->buttons;
+  if (held && (down & ~held)) held = 0; /* another press came first: the held one is dropped as before */
+  if (!held && (down & 0x3000) && start_menu_waiting()) { held = down & 0x3000; since = now; }
+  if (held && (!start_menu_waiting() || now - since > 1.0)) {
+    rt_log("menu: %s held %.0f ms until the menu took input", held & 0x1000 ? "cross" : "circle", (now - since) * 1000);
+    sent = held; sent_polls = 0; held = 0;
+  }
+  if (held) p->buttons &= ~held;
+  if (sent) { p->buttons |= sent; if (++sent_polls >= 4) sent = 0; } /* down for two frames (two readers per frame) */
+}
 API(x_XInputGetState) {
   PlatPad p; u32 packet; u32 st = ARG(1);
   g_stat_pad++;
   { extern void console_script(void); console_script(); } /* FNV_CONSOLE test commands, at the frame's input poll */
   if (!(ARG(0) == 0 && pad_script(&p, &packet)) && !plat_pad(ARG(0), &p, &packet)) RETURN_STD(2, 1167); /* ERROR_DEVICE_NOT_CONNECTED */
+  if (ARG(0) == 0) { /* menu_press_hold; the packet number changes whenever the state it reports does */
+    static u16 last_out; static u32 last_pk, extra;
+    menu_press_hold(&p);
+    if (p.buttons != last_out && packet == last_pk) extra++;
+    last_out = p.buttons; last_pk = packet; packet += extra;
+  }
   M32(st) = packet; M16(st + 4) = p.buttons; M8(st + 6) = p.lt; M8(st + 7) = p.rt;
+  if (getenv("FNV_INPUT_LOG")) { /* who reads the pad, and what it sees when the buttons change */
+    static u32 last_ret[8], last_btn[8], nret;
+    u32 caller = M32(c->r[5] + 4); /* the game's wrapper 0x9F996E is a frameless thunk: its caller's return address */
+    int k = 0;
+    while (k < (int)nret && last_ret[k] != caller) k++;
+    if (k == (int)nret && nret < 8) { last_ret[nret] = caller; last_btn[nret] = 0xFFFF; nret++; rt_log("input: new reader %08x", caller); }
+    if (k < 8 && last_btn[k] != p.buttons) { rt_log("input: reader %08x sees buttons %04x (packet %u)", caller, p.buttons, packet); last_btn[k] = p.buttons; }
+  }
   if (ARG(0) == 0) { extern int g_ds_rt; g_ds_rt = p.rt; } /* dualsense.c: a shot is rumble while R2 is held */
   M16(st + 8) = p.lx; M16(st + 10) = p.ly; M16(st + 12) = p.rx; M16(st + 14) = p.ry;
   RETURN_STD(2, 0);

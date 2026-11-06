@@ -150,6 +150,15 @@ Windows. It also reruns the launcher if `sD3DDevice` doesn't match the adapter n
   could not reach them. When the atlas is uploaded it is recognised by fingerprint, and its 22 button cells (mipmaps
   included) are overwritten with the drawings from tools/make_glyphs.py. Seen in the save menu (Delete triangle,
   Back circle) and the Pip-Boy (General square).
+- **v34, menu presses no longer lost:** the start menu (main and pause menu, and its own Yes/No prompts such as
+  "Continue from your last saved game?") ignores a click or Back that comes within 500 ms of its last action (its
+  click handler 0x7CE9B0 and back handler 0x7CF5E0 compare GetTickCount with 0x11DAAB4). Found by tracing
+  InterfaceManager::Update down to the click: the path was identical for a lost and a taken press until that
+  check. So ✕ pressed soon after leaving a page with ○, or Yes soon after Continue, had to be pressed again. The
+  game's pause is kept; a ✕ or ○ that would be dropped is held back (rt/misc.c, menu_press_hold) and given to the
+  game once the menu takes input again (the log says "menu: cross held N ms ..."). The long stand-still on the
+  Primm save (27 min, CPU-only) kept the main thread at 53-71% with no upward trend, so the creep in the user's
+  log is not in the game logic; it is more likely on the rendering side.
 - **v33:** the Back prompt (Wait) is the touchpad (the PS5 keeps the Create button for itself; the port maps the
   touchpad click to Back); the temperature functions are imported directly (the run-time lookup fails on the console,
   as it did for the pad's trigger functions). The user's v28 log of a long stand-still showed the main thread rising
