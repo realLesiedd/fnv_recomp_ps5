@@ -258,7 +258,14 @@ static const ComMethod control_m[] = {
   {"IMediaControl::get_RegFilterCollection", 2}, {"IMediaControl::StopWhenReady", 1},
 };
 
-API(ba_put_Volume) { int v = (int)ARG(1); G(c)->volume = v < -10000 ? -10000 : v > 0 ? 0 : v; RETURN_STD(2, S_OK); }
+API(ba_put_Volume) {
+  int v = (int)ARG(1);
+  v = v < -10000 ? -10000 : v > 0 ? 0 : v;
+  Graph *g = G(c);
+  if (v != g->volume) rt_log("audio: music %d -> %d", g->volume, v);
+  g->volume = v;
+  RETURN_STD(2, S_OK);
+}
 API(ba_get_Volume) { M32(ARG(1)) = (u32)G(c)->volume; RETURN_STD(2, S_OK); }
 API(ba_get_Balance) { M32(ARG(1)) = 0; RETURN_STD(2, S_OK); }
 static const ComMethod audio_m[] = {

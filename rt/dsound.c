@@ -56,6 +56,7 @@ static Buf g_buf[MAX_BUFS];
 static pthread_mutex_t g_mx = PTHREAD_MUTEX_INITIALIZER;
 static int g_rate = 48000;
 static int g_master = 0; /* primary buffer volume */
+static int g_vol_log; /* [fnv_recomp] bAudioVolumeLog, read once in dsound_init */
 static struct { float p[3], v[3], front[3], top[3], dist, rolloff, doppler; } g_lis = {
   {0, 0, 0}, {0, 0, 0}, {0, 0, 1}, {0, 1, 0}, 1, 1, 1};
 static u32 g_vt_ds, g_vt_buf, g_vt_3d, g_vt_lis, g_vt_notify, g_ds_obj, g_lis_obj;
@@ -402,6 +403,9 @@ API(b_SetVolume) {
   Buf *b = B(c);
   if (b && b->traced && b->playing && !b->primary && v != b->volume)
     rt_log("audio: buf %d volume %d -> %d while playing", (int)(b - g_buf), b->volume, v);
+  if (g_vol_log && b && !b->primary && v != b->volume)
+    rt_log("audio: buf %d 3d=%d %d -> %d", (int)(b - g_buf), (b->flags & DSBCAPS_CTRL3D) != 0, b->volume, v);
+  if (b && b->primary && v != g_master) rt_log("audio: primary %d -> %d", g_master, v);
   if (b) { if (b->primary) g_master = v; else b->volume = v; }
   RETURN_STD(2, DS_OK);
 }
@@ -715,4 +719,8 @@ API(DirectSoundCreate8) {
 }
 
 static const ApiEntry list[] = {{"DSOUND.dll", "#11", DirectSoundCreate8}, {0}};
-void dsound_init(void) { api_register(list); }
+int rt_setting_int(const char *key, int def); /* firstrun.c: [fnv_recomp] in FalloutPrefs.ini */
+void dsound_init(void) {
+  g_vol_log = rt_setting_int("bAudioVolumeLog", 0) == 1;
+  api_register(list);
+}
